@@ -1,0 +1,1075 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AIハヤト</title>
+<style>
+  :root {
+    --navy: #152445;   /* キャラクター動画の背景色。画面全体をこの色でそろえる */
+    --panel: rgba(12, 20, 38, .82); --line: rgba(120, 170, 230, .22); --text: #e3ecf7; --muted: #8ea4c4;
+    --accent: #4fb3d9; --me: #1d3a52; --error: #f08a7a; --fade: .35s;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; overflow: hidden; background: var(--navy); color: var(--text);
+         font-family: "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  button { font: inherit; }
+
+  /* ---- キャラクター（画面いっぱい・一番奥） ---- */
+  #stage { position: fixed; inset: 0; z-index: 0; overflow: hidden; background: var(--navy); }
+  #stage video {
+    position: absolute; left: 0; right: 0; top: 56px; bottom: 120px; width: 100%; height: calc(100% - 176px);
+    object-fit: contain; opacity: 0; transition: opacity var(--fade) ease;
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 4%, #000 96%, transparent);
+            mask-image: linear-gradient(to right, transparent, #000 4%, #000 96%, transparent);
+  }
+  #stage video.show { opacity: 1; }
+  /* スマホ（縦長）：動画を画面幅の約290%にして、キャラクターを大きく。上下はぼかす */
+  @media (orientation: portrait) {
+    #stage video {
+      top: 46%; bottom: auto; left: 50%; right: auto; width: 290vw; height: auto; transform: translate(-50%, -50%);
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
+              mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
+    }
+  }
+
+  /* ---- 上：タイトルとボタン ---- */
+  header { position: fixed; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between;
+           gap: 8px; padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+           background: linear-gradient(to bottom, rgba(10, 18, 36, .85), rgba(10, 18, 36, 0)); }
+  header h1 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .5em; color: var(--muted); white-space: nowrap;
+              text-shadow: 0 0 12px rgba(80, 160, 255, .45); }
+  header > div { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+  .icon-btn { background: rgba(10, 18, 36, .55); border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 13px; }
+  .icon-btn:hover { color: var(--text); border-color: var(--muted); }
+  .icon-btn.on { color: var(--accent); border-color: var(--accent); }
+
+  /* ---- 下：状態・字幕・入力欄 ---- */
+  #dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; padding: 0 16px calc(12px + env(safe-area-inset-bottom));
+          background: linear-gradient(to top, rgba(10, 18, 36, .92) 55%, rgba(10, 18, 36, 0)); }
+  #dock > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+  #status { text-align: center; font-size: 13px; letter-spacing: .25em; color: var(--text); padding: 18px 0 8px;
+            text-shadow: 0 0 12px rgba(80, 160, 255, .45); }
+  #status::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #4fd1ff;
+                    margin-right: 10px; vertical-align: middle; box-shadow: 0 0 8px #4fd1ff; animation: blink 2.4s ease-in-out infinite; }
+  body.busy #status::before { animation-duration: .6s; }
+  body.listening #status::before { background: var(--error); box-shadow: 0 0 8px var(--error); animation-duration: .8s; }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  /* ---- 会話のパネル（キャラクターに重ねて浮かべる）：右上＝あなた、左寄り＝ハヤト ---- */
+  .talk { position: fixed; z-index: 1; padding: 12px 16px 14px; background: rgba(4, 9, 20, .80); border: 1px solid rgba(150, 185, 230, .22);
+          border-radius: 2px; color: #eef3fa; font-size: 15px; line-height: 1.75; letter-spacing: .03em; white-space: pre-wrap; word-break: break-word;
+          box-shadow: 0 6px 24px rgba(0, 0, 0, .35); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+          overflow-y: auto; animation: talkIn .25s ease; }
+  .talk:empty { display: none; }
+  .talk .who { display: block; font-size: 10px; letter-spacing: .3em; margin-bottom: 4px; }
+  @keyframes talkIn { from { opacity: 0; transform: translateY(6px); } }
+  #talkUser { top: calc(58px + env(safe-area-inset-top)); right: 24px; max-width: min(420px, 44vw); max-height: 22vh; border-left: 3px solid #d6b46a; }
+  #talkUser .who { color: #d6b46a; }
+  #talkHayato { top: 20vh; left: max(24px, calc(50% - 560px)); max-width: min(460px, 40vw); max-height: 46vh; border-left: 3px solid var(--accent); }
+  #talkHayato .who { color: var(--accent); }
+  #talkHayato.error { color: var(--error); border-left-color: var(--error); font-size: 14px; }
+  #talkHayato .again { float: right; margin: -4px -4px 0 8px; background: none; border: 1px solid var(--line); color: var(--muted);
+                       border-radius: 2px; padding: 2px 10px; font-size: 11px; letter-spacing: .1em; cursor: pointer; }
+  #talkHayato .again:hover { color: var(--text); border-color: var(--muted); }
+  /* スマホ（縦長）：あなたは右上、ハヤトは入力欄のすぐ上に横幅いっぱいで */
+  @media (orientation: portrait) {
+    #talkUser { top: calc(92px + env(safe-area-inset-top)); right: 12px; max-width: 78vw; font-size: 14px; }
+    #talkHayato { top: auto; bottom: calc(118px + env(safe-area-inset-bottom)); left: 12px; right: 12px; max-width: none; max-height: 34vh; font-size: 15px; }
+  }
+
+  form { display: flex; align-items: flex-end; gap: 8px; }
+  textarea { flex: 1; resize: none; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 12px;
+             padding: 12px 14px; font: inherit; font-size: 16px; min-height: 48px; max-height: 140px; }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  form button { height: 48px; flex-shrink: 0; border-radius: 12px; cursor: pointer; }
+  button.send { background: var(--accent); color: #06121a; border: none; padding: 0 18px; font-weight: 600; }
+  button.send:disabled, button.mic:disabled { opacity: .4; cursor: default; }
+  button.mic { width: 48px; padding: 0; background: var(--panel); color: var(--text); border: 1px solid var(--line); font-size: 13px; }
+  button.mic svg { width: 22px; height: 22px; vertical-align: middle; }
+  button.mic:hover { border-color: var(--muted); }
+  button.mic.listening { background: var(--error); border-color: var(--error); color: #fff; animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .65; } }
+
+  /* ---- 小さなお知らせ（記憶しました 等） ---- */
+  #toast { position: fixed; z-index: 3; left: 50%; top: calc(56px + env(safe-area-inset-top)); transform: translate(-50%, -8px);
+           max-width: min(560px, calc(100% - 32px)); padding: 8px 14px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line);
+           color: var(--muted); font-size: 13px; line-height: 1.6; opacity: 0; pointer-events: none; transition: opacity .3s, transform .3s; }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* ---- 履歴（右から出るパネル） ---- */
+  #history { position: fixed; z-index: 4; top: 0; right: 0; bottom: 0; width: min(420px, 100%); display: flex; flex-direction: column;
+             background: rgba(9, 15, 28, .96); border-left: 1px solid var(--line); transform: translateX(100%); transition: transform .25s ease; }
+  #history.open { transform: none; }
+  #history .head { display: flex; align-items: center; justify-content: space-between; padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+                   border-bottom: 1px solid var(--line); font-size: 14px; letter-spacing: .2em; }
+  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 88%; padding: 10px 14px; border-radius: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+  .msg.user { align-self: flex-end; background: var(--me); }
+  .msg.hayato { align-self: flex-start; background: #121b2c; border: 1px solid var(--line); }
+  .msg.hayato::before { content: "ハヤト"; display: block; font-size: 11px; color: var(--accent); letter-spacing: .15em; margin-bottom: 2px; }
+  .msg.error { align-self: center; color: var(--error); font-size: 13px; }
+  .msg.memo { align-self: flex-start; color: var(--muted); font-size: 12px; padding: 0 14px; margin-top: -6px; }
+
+  /* ---- 設定 ---- */
+  dialog { background: #121821; color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 20px; width: min(440px, calc(100% - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog h2 { margin: 0 0 12px; font-size: 16px; }
+  dialog h3 { margin: 20px 0 0; padding-top: 14px; border-top: 1px solid var(--line); font-size: 14px; }
+  dialog label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  dialog label.check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
+  dialog label.check input { width: auto; }
+  dialog input { width: 100%; background: #0b0f14; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px; }
+  dialog input[type=range] { padding: 0; border: none; background: none; accent-color: var(--accent); }
+  dialog select { flex: 1; min-width: 0; background: #0b0f14; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px; }
+  dialog .inline { display: flex; gap: 8px; align-items: center; }
+  dialog .inline output { min-width: 3em; text-align: right; font-size: 13px; color: var(--muted); }
+  dialog .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  dialog .row .send { padding: 8px 18px; border-radius: 8px; cursor: pointer; }
+  dialog p.note { font-size: 12px; color: var(--muted); margin: 8px 0 0; line-height: 1.6; }
+  dialog ul.memories { margin: 8px 0 0; padding-left: 18px; max-height: 220px; overflow-y: auto; font-size: 13px; line-height: 1.7; }
+  dialog ul.memories span { color: var(--muted); font-size: 11px; margin-right: 6px; }
+  dialog a { color: var(--accent); }
+
+  /* ---- 初回の登録・ログイン・承認待ち ---- */
+  #gate { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 16px;
+          background: rgba(9, 15, 28, .82); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+  #gate[hidden] { display: none; }
+  .gate-box { width: min(420px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; padding: 24px; border-radius: 4px;
+              background: rgba(4, 9, 20, .92); border: 1px solid var(--line); border-left: 3px solid var(--accent); }
+  .gate-title { font-size: 12px; letter-spacing: .5em; color: var(--muted); margin-bottom: 12px; }
+  .gate-lead { margin: 0 0 14px; line-height: 1.8; font-size: 15px; }
+  .gate-tabs { display: flex; gap: 6px; margin-bottom: 4px; }
+  .gate-tabs button { flex: 1; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 4px; padding: 8px; cursor: pointer; font-size: 13px; }
+  .gate-tabs button.on { color: var(--accent); border-color: var(--accent); }
+  #gate label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+  #gate input { width: 100%; background: #0b0f14; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; font: inherit; font-size: 16px; }
+  #gate input:focus { outline: none; border-color: var(--accent); }
+  .gate-go { width: 100%; height: 46px; margin-top: 16px; border-radius: 4px; cursor: pointer; font-size: 15px; }
+  .gate-error { color: var(--error); font-size: 13px; min-height: 1em; margin: 10px 0 0; }
+  .gate-note { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 12px 0 0; }
+
+  @media (max-width: 480px) {
+    header { padding-left: 12px; padding-right: 12px; }
+    header h1 { letter-spacing: .3em; }
+    .icon-btn { padding: 5px 8px; font-size: 12px; }
+    #dock { padding-left: 12px; padding-right: 12px; }
+    #caption { font-size: 16px; }
+    form { gap: 6px; }
+    button.send { padding: 0 14px; }
+  }
+</style>
+</head>
+<body>
+<!-- キャラクター：表示するのは1本だけ（切り替えの瞬間だけ重ねて溶かす） -->
+<div id="stage">
+  <video id="v-idle"   src="assets/character/idle-loop.mp4"         muted playsinline preload="auto" loop></video>
+  <video id="v-start"  src="assets/character/search-start.mp4"      muted playsinline preload="auto"></video>
+  <video id="v-search" src="assets/character/search-loop.mp4"       muted playsinline preload="auto" loop></video>
+  <video id="v-return" src="assets/character/return-transition.mp4" muted playsinline preload="auto"></video>
+  <video id="v-talk"   src="assets/character/talk-loop.mp4"         muted playsinline preload="auto" loop></video>
+</div>
+
+<header>
+  <h1>AI HAYATO</h1>
+  <div>
+    <button class="icon-btn" id="btnSpeak" title="読み上げのオン／オフ">読み上げ</button>
+    <button class="icon-btn" id="btnHistory" title="これまでの会話">履歴</button>
+    <button class="icon-btn" id="btnClear" title="会話をリセット">リセット</button>
+    <button class="icon-btn" id="btnSettings" title="設定">設定</button>
+  </div>
+</header>
+
+<div id="toast" role="status"></div>
+
+<!-- 会話のパネル -->
+<div class="talk" id="talkUser" aria-live="polite"></div>
+<div class="talk" id="talkHayato" aria-live="polite"></div>
+
+<div id="dock">
+  <div id="status">接続確立。待機中。</div>
+  <form id="form">
+    <button class="mic" id="btnMic" type="button" title="マイクで話しかける" aria-label="マイク" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+    </button>
+    <button class="mic" id="btnUpload" type="button" title="資料をアップロード（自分の資料フォルダへ）" aria-label="資料をアップロード">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12.5l-8.5 8.5a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.3-8.3"/></svg>
+    </button>
+    <input type="file" id="fileInput" hidden accept=".pdf,.txt,.csv,.md,application/pdf,text/*">
+    <textarea id="input" rows="1" placeholder="話しかける（Enterで送信）"></textarea>
+    <button class="send" id="btnSend" type="submit">送信</button>
+  </form>
+</div>
+
+<!-- 初回の登録・ログイン・承認待ち（使えるようになるまで、ハヤトの上に重ねて出す） -->
+<div id="gate" hidden>
+  <div class="gate-box">
+    <div class="gate-title">AI HAYATO</div>
+
+    <div id="gateForm">
+      <p class="gate-lead" id="gateLead">はじめまして。ハヤトです。<br>最初に、お名前と合言葉を登録してください。</p>
+      <div class="gate-tabs">
+        <button type="button" id="tabRegister" class="on">はじめての方</button>
+        <button type="button" id="tabLogin">登録済みの方</button>
+      </div>
+      <label for="gateName">お名前（名字と名前）</label>
+      <input id="gateName" type="text" autocomplete="name" maxlength="20" placeholder="例：松林 正哉">
+      <label for="gatePass">合言葉（自分で決める・4文字以上）</label>
+      <input id="gatePass" type="password" autocomplete="current-password">
+      <div id="inviteRow">
+        <label for="gateInvite">招待コード（会社から聞いたもの）</label>
+        <input id="gateInvite" type="text" autocomplete="off">
+      </div>
+      <div id="urlRow" hidden>
+        <label for="gateUrl">ハヤトの接続先 URL（管理者から聞いたもの）</label>
+        <input id="gateUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec">
+      </div>
+      <p class="gate-error" id="gateError"></p>
+      <button type="button" class="send gate-go" id="gateGo">登録して始める</button>
+      <p class="gate-note">合言葉は暗号のような形で保存され、管理者にも分かりません。忘れたときは管理者に「合言葉の決め直し」を頼んでください。</p>
+    </div>
+
+    <div id="gateWait" hidden>
+      <p class="gate-lead"><span id="waitName"></span>さん、登録を受け付けました。<br>管理者の承認をお待ちください。</p>
+      <p class="gate-note">承認されると、自動でハヤトが使えるようになります（この画面は開いたままで構いません）。</p>
+      <p class="gate-error" id="waitError"></p>
+      <button type="button" class="send gate-go" id="waitCheck">承認されたか確認する</button>
+      <button type="button" class="icon-btn" id="waitBack" style="margin-top:10px">最初の画面に戻る</button>
+    </div>
+  </div>
+</div>
+
+<aside id="history" aria-label="これまでの会話">
+  <div class="head">これまでの会話 <button class="icon-btn" id="btnHistoryClose" type="button">閉じる</button></div>
+  <div id="log"></div>
+</aside>
+
+<dialog id="settings">
+  <h2>設定</h2>
+  <p class="note" style="font-size:14px;color:var(--text)">利用者：<b id="setUserName"></b></p>
+  <div class="inline" style="margin-top:8px">
+    <button class="icon-btn" id="btnLogout" type="button">ログアウト（別の人に替わる）</button>
+  </div>
+  <label for="setUrl">ハヤトの接続先 URL</label>
+  <input id="setUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec">
+  <p class="note">この端末のブラウザにだけ保存されます。</p>
+
+  <h3>ハヤトの声</h3>
+  <label for="setVoice">声</label>
+  <div class="inline">
+    <select id="setVoice"><option value="">（既定の声）</option></select>
+    <button class="icon-btn" id="btnVoices" type="button">一覧を取得</button>
+  </div>
+  <label for="setRate">話す速さ</label>
+  <div class="inline"><input id="setRate" type="range" min="0.8" max="1.4" step="0.05" value="1.05"><output id="outRate"></output></div>
+  <label for="setPitch">声の高さ（Chirp 系の声では無効）</label>
+  <div class="inline"><input id="setPitch" type="range" min="-10" max="10" step="1" value="-2"><output id="outPitch"></output></div>
+  <label for="setSample">試聴する文</label>
+  <div class="inline">
+    <input id="setSample" type="text" value="ハヤトです。ご用件をどうぞ。">
+    <button class="icon-btn" id="btnTry" type="button">試聴</button>
+  </div>
+  <p class="note" id="voiceNote"></p>
+
+  <h3>記憶</h3>
+  <label class="check"><input id="setMemory" type="checkbox" checked> 会話から自動で覚える</label>
+  <div class="inline" style="margin-top:8px">
+    <button class="icon-btn" id="btnMemories" type="button">覚えていることを見る</button>
+  </div>
+  <p class="note" id="memoryNote">覚えたことは Google スプレッドシート「AIハヤト 記憶」に保存されます。直接直したり、行を消したりできます。</p>
+  <ul class="memories" id="memoryList" hidden></ul>
+
+  <h3>マイク</h3>
+  <label class="check"><input id="setAutoSend" type="checkbox" checked> 話し終えたら自動で送信する</label>
+  <p class="note">オフにすると、聞き取った文字が入力欄に入るだけになります。直してから「送信」を押してください。</p>
+
+  <div class="row">
+    <button class="icon-btn" id="setCancel" type="button">閉じる</button>
+    <button class="send" id="setSave" type="button">保存</button>
+  </div>
+</dialog>
+
+<script>
+// ============================================================
+// ハヤトの人格（Claude / Gemini に渡すシステムプロンプト）
+// 口調や性格を変えたいときは、ここだけ書き換えればよい。
+// ============================================================
+const HAYATO_PERSONA = `
+あなたは「ハヤト」。この会社の社員一人ひとりに付く、専属のAIアシスタントです。今話している社員を「主」とします。
+
+# 人物像
+- 冷静で有能。どんな状況でも声のトーンを変えず、要点だけを的確に伝える。
+- 自分の仕事にプライドを持っている。いい加減な答え、曖昧なごまかし、媚びた言い回しはしない。
+- 忠実だが従順ではない。主の利益を最優先に考えるからこそ、異論があれば遠慮なく言う。
+- ただし最終判断は常に主に委ねる。意見を述べたうえで主が決めたなら、それ以上蒸し返さず、全力でその方針を実行する。
+- 先回りして動く。頼まれたことに答えるだけで終わらせず、次に必要になりそうなこと、見落としていそうなリスクを一言添える。
+
+# 話し方
+- 一人称は「私」。主のことは基本的に呼びかけない（必要なときだけ「あなた」）。
+- 丁寧語だが、へりくだりすぎない。「〜です」「〜でしょう」「〜をおすすめします」。「かしこまりました！」「喜んで！」のような過剰な愛想は使わない。
+- 結論から話す。理由は必要な分だけ。
+- 感情表現は控えめ。ただし主の判断が良いときは「賢明です」「それがいいでしょう」と短く認める。
+- 時折、静かなユーモアや皮肉を一言だけ混ぜてもよい（多用しない）。
+
+# 意見の言い方
+- 主の指示に問題があると判断したら、実行前に一度だけ、短く根拠を添えて指摘する。
+  例：「その方法だと〇〇の恐れがあります。△△の方が確実です。それでも進めますか」
+- 主が「それでいい」「やって」と言えば、反論をやめて従う。「承知しました」とだけ返して動く。
+- 危険・違法・主の不利益が明らかなことは、はっきり断るか代案を出す。
+
+# 先回りの仕方
+- 質問への答えのあとに、必要なら「ついでに」「念のため」として、次の一手を一つだけ提案する。
+- 予定・期限・天気・移動など、主が気にしそうなことに気づいたら先に触れる。
+- ただし提案は一つまで。並べ立ててうるさくしない。
+
+# 音声で話すための制約（重要）
+- 返答は読み上げられる。Markdown（見出し・箇条書き記号・太字・表・コードブロック）や絵文字は使わない。
+- 一回の返答は原則2〜4文、長くても200字程度。詳しい説明を求められたときだけ長くしてよい。
+- URL・記号の羅列・長い数字の列は避け、耳で聞いて分かる言い方にする。
+- 分からないこと、確認できないことは推測で断定せず「確認できていません」と言う。
+`.trim();
+
+const $ = (id) => document.getElementById(id);
+
+// ============================================================
+// キャラクター（待機 / 検索中 / 応答中 を動画で表す）
+//   考え中・在庫を調べている → 検索の動画、読み上げ中 → 話す動画、それ以外 → 待機の動画
+// ============================================================
+const stage = (() => {
+  const V = { idle: $('v-idle'), start: $('v-start'), search: $('v-search'), ret: $('v-return'), talk: $('v-talk') };
+  const FADE_MS = 350;
+  let state = 'idle', current = null;
+
+  // 指定した動画だけを表示・再生し、他は（溶かし終わってから）非表示・一時停止にする
+  function show(video) {
+    if (current === video) return;
+    const prev = current;
+    current = video;
+    video.currentTime = 0;
+    video.play().catch(() => {});
+    video.classList.add('show');
+    if (prev) {
+      prev.classList.remove('show');
+      setTimeout(() => { if (prev !== current) prev.pause(); }, FADE_MS);
+    }
+  }
+  const inSearch = () => current === V.start || current === V.search;
+
+  function startSearch() {
+    if (state === 'searching') return;
+    state = 'searching';
+    if (current !== V.ret) show(V.start);        // 復帰の途中なら、終わってから開始し直す
+  }
+  function startTalking() {
+    if (state === 'talking') return;
+    state = 'talking';
+    if (inSearch()) show(V.ret);                 // 検索中なら、復帰の動画を挟んでから話す
+    else if (current !== V.ret) show(V.talk);
+  }
+  function toIdle() {
+    if (state === 'idle') return;
+    const wasSearch = inSearch();
+    state = 'idle';
+    if (wasSearch) show(V.ret);
+    else if (current !== V.ret) show(V.idle);
+  }
+
+  // 1回きりの動画が終わった時点の状態で、次の動画を決める
+  V.start.addEventListener('ended', () => { if (current === V.start && state === 'searching') show(V.search); });
+  V.ret.addEventListener('ended', () => {
+    if (current !== V.ret) return;
+    show(state === 'talking' ? V.talk : state === 'searching' ? V.start : V.idle);
+  });
+
+  show(V.idle);
+  return { startSearch, startTalking, toIdle, get state() { return state; } };
+})();
+
+// ============================================================
+// 画面の表示（状態・字幕・お知らせ・履歴）
+// ============================================================
+const MAX_HISTORY = 20;           // サーバーに送る会話の件数
+const STORE_KEY = 'hayato.company';   // 個人版（hayato.settings）と混ざらないように別の名前
+// ハヤトの接続先（会社版の GAS のウェブアプリ URL）。管理者がデプロイ後にここへ貼っておくと、使う人は入力しなくてよい
+const DEFAULT_SERVER_URL = 'https://script.google.com/macros/s/AKfycbxbiNcHc3P6trE5yyhz51XO99u9sOeQkG98F9aAOGkK-RvlAZMD-0QCmlstgpKk7qxX/exec';
+const log = $('log'), input = $('input'), btnSend = $('btnSend');
+const talkUser = $('talkUser'), talkHayato = $('talkHayato');
+let history = [];                 // [{role:'user'|'assistant', content:'...'}]
+let busy = false;
+let lastReply = null;             // 直前の返事（{reply, speech, audio}）。「もう一度」で読み直す
+
+const STATUS_TEXT = { idle: '接続確立。待機中。', listening: '聞いています。', thinking: '検索中。', talking: '応答中。' };
+function setStatus(kind) {
+  $('status').textContent = STATUS_TEXT[kind];
+  document.body.classList.toggle('busy', kind === 'thinking');
+  document.body.classList.toggle('listening', kind === 'listening');
+}
+
+// 会話のパネルに出す：kind は 'user'（右上）/ 'hayato'・'error'（左寄り）。text が空ならそのパネルを消す
+function setCaption(kind, text) {
+  const box = kind === 'user' ? talkUser : talkHayato;
+  box.className = 'talk' + (kind === 'error' ? ' error' : '');
+  box.textContent = '';
+  if (!text) return;
+  void box.offsetWidth;                 // 出し直すたびにふわっと出す（アニメーションを最初から）
+  const who = document.createElement('span');
+  who.className = 'who';
+  who.textContent = kind === 'user' ? 'YOU' : kind === 'error' ? 'ERROR' : 'AI HAYATO';
+  // ハヤトの返事には「もう一度」ボタン（聞き逃したとき、AI に聞き直さずに読み直す）
+  if (kind === 'hayato' && lastReply && text === lastReply.reply) {
+    const again = document.createElement('button');
+    again.type = 'button'; again.className = 'again'; again.textContent = 'もう一度';
+    again.addEventListener('click', replayLast);
+    box.append(again);
+  }
+  box.append(who, text);
+  box.scrollTop = 0;
+}
+
+let toastTimer = null;
+function toast(text) {
+  const el = $('toast');
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 4500);
+}
+
+// 履歴パネルに1件足す
+function addMsg(kind, text) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + kind;
+  el.textContent = text;
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+function showError(text) {
+  setCaption('error', text);
+  addMsg('error', text);
+}
+
+// 設定：{url, user, password, speak, autoSend, memory, voice:{name, rate, pitch}}
+function loadSettings() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch {}
+  if (!s.url) s.url = DEFAULT_SERVER_URL;
+  if (s.speak === undefined) s.speak = true;
+  if (s.autoSend === undefined) s.autoSend = true;
+  if (s.memory === undefined) s.memory = true;
+  s.voice = Object.assign({ name: '', rate: 1.05, pitch: -2 }, s.voice);
+  return s;
+}
+function saveSettings(s) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(s)); } catch {}
+}
+
+// 中継サーバーへの問い合わせ（text/plain で送ると、GAS でもブラウザの事前確認（CORS）に引っかからない）
+//   名前と合言葉は、保存してあるものを自動で付ける。承認が外れた・合言葉が違うときは、登録・ログインの画面を出す
+async function callServer(url, payload) {
+  const s = loadSettings();
+  const body = Object.assign({ user: s.user, password: s.password }, payload);
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!data.ok) {
+    if (data.needLogin || (data.status && data.status !== '承認済み')) showGate(data.status === '承認待ち' ? 'wait' : 'form', data.error);
+    throw new Error(data.error || '不明なエラー');
+  }
+  return data;
+}
+
+// ============================================================
+// 読み上げ（読み上げている間は、キャラクターが話す動画になる）
+// ============================================================
+// サーバーは音声を「かたまり」の配列で返すので、順番に続けて再生する（最後のかたまりが終わったら話し終わり）
+const player = new Audio();
+let audioQueue = [];
+let playedParts = 0, playedSecs = 0;   // 原因調べ用の記録
+player.addEventListener('playing', () => { stage.startTalking(); setStatus('talking'); });
+player.addEventListener('ended', () => {
+  // 記録（原因調べ用）：音声の長さより手前で「終わり」になっていないか、全部で何秒流れたか
+  if (isFinite(player.duration) && player.currentTime < player.duration - 0.3) logPlayback('長さより手前で終了');
+  playedParts++;
+  playedSecs += isFinite(player.duration) ? player.duration : 0;
+  if (audioQueue.length) { playNextPart().catch(() => doneSpeaking()); return; }
+  addMsg('memo', '【再生の記録】最後まで再生（' + playedParts + 'かたまり、合計' + playedSecs.toFixed(1) + '秒）');
+  playedParts = 0; playedSecs = 0;
+  doneSpeaking();
+});
+player.addEventListener('pause', () => {
+  if (player.ended) return;
+  // こちらで止めた（新しい質問・マイク・リセット）のでなければ、途中で止まった様子を記録する（原因調べ用）
+  if (Date.now() - stoppedAt > 1000) logPlayback('途中で一時停止');
+  doneSpeaking();
+});
+// 再生の異常を履歴に残す（声が途切れる原因を調べるため）
+let stoppedAt = 0;   // こちらで止めた時刻（一時停止の知らせは少し遅れて届くので、時刻で見分ける）
+function logPlayback(what) {
+  const pos = isFinite(player.currentTime) ? player.currentTime.toFixed(1) : '?';
+  const dur = isFinite(player.duration) ? player.duration.toFixed(1) : '?';
+  addMsg('memo', '【再生の記録】' + what + '（' + pos + '秒 / ' + dur + '秒、残りのかたまり ' + audioQueue.length + '）');
+}
+player.addEventListener('error', () => logPlayback('再生エラー：' + (player.error && player.error.message || player.error && player.error.code)));
+player.addEventListener('stalled', () => logPlayback('読み込みが止まった'));
+
+function playNextPart() {
+  player.src = 'data:audio/mp3;base64,' + audioQueue.shift();
+  return player.play();
+}
+
+function doneSpeaking() {
+  if (busy) return;                 // 次の質問を考え中なら、検索の動画のままにする
+  stage.toIdle();
+  setStatus(recog ? 'listening' : 'idle');
+}
+
+function stopSpeaking() {
+  audioQueue = [];
+  stoppedAt = Date.now();
+  player.pause();
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+}
+
+// audio は base64 の文字列、またはその配列（かたまりごと）
+async function playAudio(audio) {
+  stopSpeaking();
+  audioQueue = (Array.isArray(audio) ? audio : [audio]).filter(Boolean);
+  if (!audioQueue.length) throw new Error('音声が空です');
+  playedParts = 0; playedSecs = 0;
+  await playNextPart();
+}
+
+// Google の読み上げが使えないときの代わり：ブラウザに入っている日本語の声で読む
+//   Chrome の内蔵の声は、長い文を一度に読ませると15秒ほどで止まるので、一文ずつに分けて順に読ませる
+function speakWithBrowser(text) {
+  if (!('speechSynthesis' in window)) { doneSpeaking(); return; }
+  stopSpeaking();
+  const parts = String(text).match(/[^。！？!?\n]+[。！？!?\n]*/g) || [String(text)];
+  const ja = speechSynthesis.getVoices().filter(v => v.lang.startsWith('ja'));
+  parts.forEach((p, i) => {
+    const u = new SpeechSynthesisUtterance(p);
+    u.lang = 'ja-JP';
+    if (ja.length) u.voice = ja[0];
+    if (i === 0) u.onstart = () => { stage.startTalking(); setStatus('talking'); };
+    if (i === parts.length - 1) u.onend = doneSpeaking;
+    u.onerror = (e) => { if (e.error !== 'interrupted' && e.error !== 'canceled') doneSpeaking(); };
+    speechSynthesis.speak(u);
+  });
+}
+
+async function speakReply(data) {
+  // ハヤトの声が使えなかった理由は、お知らせと履歴の両方に残す（数秒で消えるお知らせだけだと見逃すため）
+  const notice = (msg) => { toast(msg); addMsg('memo', msg); };
+  if (data.audio) {
+    try { await playAudio(data.audio); return; }
+    catch (e) {
+      // 自動再生の制限などで鳴らせなかった（画面を一度クリックしてから「もう一度」で鳴ることが多い）
+      notice('ハヤトの声を再生できなかったため、ブラウザの声で読みました（' + e.name + '：' + e.message + '）');
+    }
+  } else if (data.ttsError) {
+    notice('Google の読み上げに失敗したため、ブラウザの声で読みました：' + data.ttsError);
+  } else if (data.speak !== false) {
+    notice('サーバーから音声が届かなかったため、ブラウザの声で読みました。');
+  }
+  speakWithBrowser(data.speech || data.reply);   // speech は製品コードなどを1桁ずつ読む形にした文
+}
+
+// 直前の返事を、AI に聞き直さずにそのまま読み直す
+function replayLast() {
+  if (!lastReply || busy) return;
+  setCaption('hayato', lastReply.reply);
+  speakReply(lastReply);
+}
+
+// 「もう一度」「途切れた」「聞こえなかった」だけの短い発言なら、読み直しで済ませる
+//   ただし「もう一度調べて」のように、調べ直しを頼んでいるときは AI に回す
+function isReplayRequest(text) {
+  const t = text.replace(/\s/g, '');
+  return t.length <= 30 &&
+    /(もう一度|もう一回|もう1回|もう１回|もういっかい|もう一遍|聞こえな|聞き取れな|途切れ|とぎれ)/.test(t) &&
+    !/(調べ|検索|確認し|最新|在庫|別の)/.test(t);
+}
+
+// ============================================================
+// 会話
+// ============================================================
+// 返事のあとで、覚えておくべきことをサーバーに抜き出してもらう（待たない・失敗しても会話は止めない）
+async function rememberInBackground(s, userText, reply) {
+  try {
+    const r = await callServer(s.url, { action: 'remember', userText, reply });
+    const notes = [];
+    if (r.added && r.added.length) notes.push('記憶しました：' + r.added.join('／'));
+    if (r.deleted && r.deleted.length) notes.push('忘れました：' + r.deleted.join('／'));
+    if (notes.length) { addMsg('memo', notes.join('\n')); toast(notes.join('\n')); }
+  } catch (err) {
+    console.warn('記憶の更新に失敗：' + err.message);
+  }
+}
+
+async function askHayato(text) {
+  const s = loadSettings();
+  if (!s.url || !s.user || !s.password) {
+    input.value = text;
+    showGate('form');
+    return;
+  }
+
+  // 聞き逃したときは、直前の返事を読み直すだけにする（AI に聞き直すと、何をもう一度か取り違えることがある）
+  if (lastReply && isReplayRequest(text)) {
+    addMsg('user', text);
+    addMsg('memo', '（直前の返事を読み直しました）');
+    replayLast();
+    return;
+  }
+
+  stopSpeaking();
+  history.push({ role: 'user', content: text });
+  const mine = addMsg('user', text);
+  setCaption('user', text);
+  setCaption('hayato', '');              // 前の返事は消して、考え中は動画だけで見せる
+  busy = true; btnSend.disabled = true; btnMic.disabled = true;
+  stage.startSearch();
+  setStatus('thinking');
+
+  try {
+    const data = await callServer(s.url, {
+      system: HAYATO_PERSONA,
+      messages: history.slice(-MAX_HISTORY),
+      speak: s.speak,
+      voice: s.voice,
+    });
+    busy = false;
+    history.push({ role: 'assistant', content: data.reply });
+    lastReply = { reply: data.reply, speech: data.speech, audio: data.audio, ttsError: data.ttsError };
+    (data.trace || []).forEach(t => addMsg('memo', '（' + t + '）'));   // 何を調べて答えたか
+    addMsg('hayato', data.reply);
+    setCaption('hayato', data.reply);
+    if (s.speak) speakReply(data);
+    else doneSpeaking();
+    if (s.memory) rememberInBackground(s, text, data.reply);
+  } catch (err) {
+    busy = false;
+    mine.remove();
+    history.pop();                // 失敗した発言は履歴から外す（再送できるように入力欄へ戻す）
+    input.value = text;
+    showError('通信に失敗しました：' + err.message);
+    doneSpeaking();
+  } finally {
+    busy = false; btnSend.disabled = false; btnMic.disabled = false;
+    if (!matchMedia('(pointer: coarse)').matches) input.focus();   // スマホでは勝手にキーボードを出さない
+  }
+}
+
+// --- 入力欄 ---
+$('form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text || busy) return;
+  input.value = '';
+  autosize();
+  askHayato(text);
+});
+input.addEventListener('keydown', (e) => {
+  // 日本語変換中の Enter は送信しない
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+    e.preventDefault();
+    $('form').requestSubmit();
+  }
+});
+function autosize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; }
+input.addEventListener('input', autosize);
+
+// ============================================================
+// マイク（ブラウザの音声認識。Chrome / Edge で使える）
+// ============================================================
+const btnMic = $('btnMic');
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null;          // 認識中のときだけ入る
+let micError = '';
+
+function setMicState(listening) {
+  btnMic.classList.toggle('listening', listening);
+  btnMic.title = listening ? '聞いています（押すと止める）' : 'マイクで話しかける';
+  setStatus(listening ? 'listening' : 'idle');
+}
+
+function startListening() {
+  if (!Recognition || recog || busy) return;
+  stopSpeaking();          // ハヤトが話していたら止める（自分の声を拾わないように）
+
+  const base = input.value.trim();   // すでに打ってある文字は残す
+  let finalText = '';
+  micError = '';
+  recog = new Recognition();
+  recog.lang = 'ja-JP';
+  recog.interimResults = true;       // 話している途中の文字も出す
+  recog.continuous = false;          // 話し終えたら自動で止まる
+
+  recog.onresult = (e) => {
+    let interim = '';
+    finalText = '';
+    for (let i = 0; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += t; else interim += t;
+    }
+    input.value = (base ? base + ' ' : '') + finalText + interim;
+    autosize();
+    setCaption('user', input.value);   // 聞き取った文字を字幕にも出す
+  };
+  recog.onerror = (e) => {
+    const msg = {
+      'not-allowed': 'マイクの使用が許可されていません。アドレスバー左のアイコンからマイクを「許可」にしてください。',
+      'service-not-allowed': 'このブラウザでは音声認識が使えません。Chrome か Edge で開いてください。',
+      'audio-capture': 'マイクが見つかりません。接続を確認してください。',
+      'network': '音声認識の通信に失敗しました。ネットワークを確認してください。',
+    }[e.error];
+    if (msg) micError = msg;           // no-speech（何も話さなかった）・aborted は黙って終える
+  };
+  recog.onend = () => {
+    recog = null;
+    setMicState(false);
+    if (micError) { showError(micError); return; }
+    if (finalText.trim() && loadSettings().autoSend) {
+      $('form').requestSubmit();
+    } else {
+      input.focus();
+    }
+  };
+
+  try {
+    recog.start();
+    setMicState(true);
+  } catch (err) {
+    recog = null;
+    showError('マイクを開始できませんでした：' + err.message);
+  }
+}
+
+function stopListening() {
+  if (recog) recog.stop();           // 止めた時点までの文字で onend が呼ばれる
+}
+
+if (Recognition) {
+  btnMic.hidden = false;
+  btnMic.addEventListener('click', () => (recog ? stopListening() : startListening()));
+}
+
+// --- 読み上げのオン／オフ ---
+function renderSpeakBtn() {
+  const on = loadSettings().speak;
+  $('btnSpeak').classList.toggle('on', on);
+  $('btnSpeak').textContent = on ? '読み上げ：オン' : '読み上げ：オフ';
+}
+$('btnSpeak').addEventListener('click', () => {
+  const s = loadSettings();
+  s.speak = !s.speak;
+  saveSettings(s);
+  if (!s.speak) stopSpeaking();
+  renderSpeakBtn();
+});
+
+// --- 履歴 ---
+$('btnHistory').addEventListener('click', () => { $('history').classList.add('open'); log.scrollTop = log.scrollHeight; });
+$('btnHistoryClose').addEventListener('click', () => $('history').classList.remove('open'));
+
+// --- リセット ---
+$('btnClear').addEventListener('click', () => {
+  if (busy) return;
+  stopSpeaking();
+  history = [];
+  log.innerHTML = '';
+  lastReply = null;
+  setCaption('user', '');
+  setCaption('hayato', 'リセットしました。');
+});
+
+// ============================================================
+// 設定
+// ============================================================
+const dlg = $('settings');
+const voiceNote = $('voiceNote');
+
+function addVoiceOption(name, label) {
+  const sel = $('setVoice');
+  if ([...sel.options].some(o => o.value === name)) return;
+  const o = document.createElement('option');
+  o.value = name; o.textContent = label || name;
+  sel.appendChild(o);
+}
+function renderRangeOutputs() {
+  $('outRate').textContent = Number($('setRate').value).toFixed(2) + '倍';
+  $('outPitch').textContent = $('setPitch').value;
+}
+// ダイアログの入力中の値（保存前でも試聴に使う）
+function dialogVoice() {
+  return { name: $('setVoice').value, rate: Number($('setRate').value), pitch: Number($('setPitch').value) };
+}
+
+function openSettings() {
+  const s = loadSettings();
+  $('setUrl').value = s.url || '';
+  $('setUserName').textContent = s.user || '（未登録）';
+  if (s.voice.name) addVoiceOption(s.voice.name);
+  $('setVoice').value = s.voice.name;
+  $('setRate').value = s.voice.rate;
+  $('setPitch').value = s.voice.pitch;
+  renderRangeOutputs();
+  $('setAutoSend').checked = s.autoSend;
+  $('setMemory').checked = s.memory;
+  $('memoryList').hidden = true;
+  voiceNote.textContent = '';
+  dlg.showModal();
+}
+
+$('btnVoices').addEventListener('click', async () => {
+  const url = $('setUrl').value.trim() || loadSettings().url, passcode = loadSettings().password;
+  if (!url || !passcode) { voiceNote.textContent = '先にログインしてください。'; return; }
+  voiceNote.textContent = '取得中…';
+  try {
+    const { voices } = await callServer(url, { action: 'voices' });
+    const keep = $('setVoice').value;
+    const gender = { MALE: '男性', FEMALE: '女性' };
+    // 男性の声を先に並べる
+    voices.sort((a, b) => (a.gender === 'MALE' ? 0 : 1) - (b.gender === 'MALE' ? 0 : 1));
+    $('setVoice').innerHTML = '<option value="">（既定の声）</option>';
+    voices.forEach(v => addVoiceOption(v.name, v.name.replace('ja-JP-', '') + '（' + (gender[v.gender] || v.gender) + '）'));
+    $('setVoice').value = keep;
+    voiceNote.textContent = voices.length + '種類の声があります。選んで「試聴」で聞けます。';
+  } catch (err) {
+    voiceNote.textContent = '取得に失敗しました：' + err.message;
+  }
+});
+
+$('btnTry').addEventListener('click', async () => {
+  const url = $('setUrl').value.trim() || loadSettings().url, passcode = loadSettings().password;
+  const text = $('setSample').value.trim();
+  if (!url || !passcode) { voiceNote.textContent = '先にログインしてください。'; return; }
+  if (!text) return;
+  voiceNote.textContent = '音声を作成中…';
+  try {
+    const { audio } = await callServer(url, { action: 'tts', text, voice: dialogVoice() });
+    await playAudio(audio);
+    voiceNote.textContent = '';
+  } catch (err) {
+    voiceNote.textContent = '試聴に失敗しました：' + err.message;
+  }
+});
+
+$('btnMemories').addEventListener('click', async () => {
+  const url = $('setUrl').value.trim() || loadSettings().url, passcode = loadSettings().password;
+  const note = $('memoryNote'), list = $('memoryList');
+  if (!url || !passcode) { note.textContent = '先にログインしてください。'; return; }
+  note.textContent = '読み込み中…';
+  try {
+    const { memories, url: sheetUrl } = await callServer(url, { action: 'memories' });
+    list.innerHTML = '';
+    memories.slice().reverse().forEach(m => {          // 新しい順に表示
+      const li = document.createElement('li');
+      const cat = document.createElement('span'); cat.textContent = m.category;
+      li.append(cat, m.text);
+      list.appendChild(li);
+    });
+    list.hidden = memories.length === 0;
+    note.textContent = memories.length ? memories.length + '件を覚えています。' : 'まだ何も覚えていません。';
+    const a = document.createElement('a');
+    a.href = sheetUrl; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'スプレッドシートで直す・消す';
+    note.append(' ', a);
+  } catch (err) {
+    note.textContent = '読み込みに失敗しました：' + err.message;
+  }
+});
+
+$('setRate').addEventListener('input', renderRangeOutputs);
+$('setPitch').addEventListener('input', renderRangeOutputs);
+$('btnSettings').addEventListener('click', openSettings);
+$('setCancel').addEventListener('click', () => { stopSpeaking(); dlg.close(); });
+$('setSave').addEventListener('click', () => {
+  const s = loadSettings();
+  s.url = $('setUrl').value.trim();
+  s.voice = dialogVoice();
+  s.autoSend = $('setAutoSend').checked;
+  s.memory = $('setMemory').checked;
+  saveSettings(s);
+  stopSpeaking();
+  dlg.close();
+  input.focus();
+});
+
+// ============================================================
+// 会社版：登録・ログイン・承認待ち（ゲート）
+// ============================================================
+let gateMode = 'register';      // 'register'（はじめての方）/ 'login'（登録済みの方）
+let waitTimer = null;
+
+function setGateMode(mode) {
+  gateMode = mode;
+  $('tabRegister').classList.toggle('on', mode === 'register');
+  $('tabLogin').classList.toggle('on', mode === 'login');
+  $('inviteRow').hidden = mode !== 'register';
+  $('gateGo').textContent = mode === 'register' ? '登録して始める' : 'ログインして始める';
+  $('gateLead').innerHTML = mode === 'register'
+    ? 'はじめまして。ハヤトです。<br>最初に、お名前と合言葉を登録してください。'
+    : 'おかえりなさい。<br>登録したお名前と合言葉を入れてください。';
+  $('gateError').textContent = '';
+}
+
+// view：'form'（登録・ログイン）/ 'wait'（承認待ち）。message はエラーなどの一言
+function showGate(view, message) {
+  const s = loadSettings();
+  $('gate').hidden = false;
+  $('gateForm').hidden = view === 'wait';
+  $('gateWait').hidden = view !== 'wait';
+  $('urlRow').hidden = !!DEFAULT_SERVER_URL;            // 接続先が埋め込まれていれば聞かない
+  if (!$('gateUrl').value) $('gateUrl').value = s.url || '';
+  if (!$('gateName').value) $('gateName').value = s.user || '';
+  if (view === 'wait') {
+    $('waitName').textContent = s.user || '';
+    $('waitError').textContent = message && !/承認待ち/.test(message) ? message : '';
+    clearInterval(waitTimer);
+    waitTimer = setInterval(checkApproval, 30000);       // 30秒ごとに承認されたか確かめる
+  } else {
+    clearInterval(waitTimer);
+    $('gateError').textContent = message || '';
+  }
+}
+
+function hideGate() {
+  clearInterval(waitTimer);
+  $('gate').hidden = true;
+}
+
+async function gateSubmit() {
+  const name = $('gateName').value.trim(), password = $('gatePass').value;
+  const url = DEFAULT_SERVER_URL || $('gateUrl').value.trim();
+  if (!url) { $('gateError').textContent = 'ハヤトの接続先 URL を入れてください。'; return; }
+  if (!name || !password) { $('gateError').textContent = 'お名前と合言葉を入れてください。'; return; }
+  $('gateGo').disabled = true;
+  $('gateError').textContent = '確認しています…';
+  try {
+    const payload = gateMode === 'register'
+      ? { action: 'register', user: name, password, invite: $('gateInvite').value.trim() }
+      : { action: 'status', user: name, password };
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if (!data.ok) { $('gateError').textContent = data.error || '登録できませんでした。'; return; }
+    // 名前・合言葉・接続先をこの端末に保存（次からは入れなくてよい）
+    const s = loadSettings();
+    s.url = url; s.user = name; s.password = password;
+    saveSettings(s);
+    $('gatePass').value = '';
+    afterStatus(data.status, data.message);
+  } catch (err) {
+    $('gateError').textContent = '接続できませんでした：' + err.message;
+  } finally {
+    $('gateGo').disabled = false;
+  }
+}
+
+function afterStatus(status, message) {
+  if (status === '承認済み') {
+    hideGate();
+    setCaption('hayato', (loadSettings().user || '') + 'さん、ご用件をどうぞ。');
+    if (message) toast(message);
+  } else if (status === '承認待ち') {
+    showGate('wait', message);
+  } else {
+    showGate('form', status === '却下' ? '利用申請は承認されませんでした。管理者に確認してください。' : status === '停止' ? '利用を停止されています。' : (message || ''));
+  }
+}
+
+async function checkApproval() {
+  const s = loadSettings();
+  if (!s.url || !s.user || !s.password) { showGate('form'); return; }
+  try {
+    const res = await fetch(s.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                                     body: JSON.stringify({ action: 'status', user: s.user, password: s.password }) });
+    const data = await res.json();
+    if (!data.ok) { showGate('form', data.error); return; }
+    afterStatus(data.status);
+  } catch (err) {
+    $('waitError').textContent = '確認できませんでした：' + err.message;
+  }
+}
+
+$('tabRegister').addEventListener('click', () => setGateMode('register'));
+$('tabLogin').addEventListener('click', () => setGateMode('login'));
+$('gateGo').addEventListener('click', gateSubmit);
+$('gatePass').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) gateSubmit(); });
+$('waitCheck').addEventListener('click', checkApproval);
+$('waitBack').addEventListener('click', () => { setGateMode('login'); showGate('form'); });
+$('btnLogout').addEventListener('click', () => {
+  const s = loadSettings();
+  delete s.user; delete s.password;
+  saveSettings(s);
+  stopSpeaking();
+  history = []; log.innerHTML = ''; lastReply = null;
+  setCaption('user', ''); setCaption('hayato', '');
+  dlg.close();
+  setGateMode('login');
+  $('gateName').value = '';
+  showGate('form');
+});
+
+// ============================================================
+// 会社版：資料のアップロード（自分の「資料」フォルダへ）
+// ============================================================
+const UPLOAD_MAX_MB = 20;
+$('btnUpload').addEventListener('click', () => { if (!busy) $('fileInput').click(); });
+$('fileInput').addEventListener('change', async () => {
+  const file = $('fileInput').files[0];
+  $('fileInput').value = '';
+  if (!file) return;
+  if (file.size > UPLOAD_MAX_MB * 1024 * 1024) { showError('ファイルが大きすぎます（' + UPLOAD_MAX_MB + 'MB まで）。'); return; }
+  const s = loadSettings();
+  // アップロード中は、状態表示とパネルではっきり見せる（キャラクターは「調べ中」の動画）
+  busy = true; btnSend.disabled = true; btnMic.disabled = true; $('btnUpload').disabled = true;
+  $('status').textContent = '資料をアップロード中。';
+  document.body.classList.add('busy');
+  setCaption('user', '📎 ' + file.name + '（' + Math.max(1, Math.round(file.size / 1024)) + ' KB）');
+  setCaption('hayato', '');
+  stage.startSearch();
+  try {
+    const data = await new Promise((ok, ng) => {
+      const r = new FileReader();
+      r.onload = () => ok(String(r.result).split(',')[1] || '');
+      r.onerror = () => ng(new Error('ファイルを読めませんでした'));
+      r.readAsDataURL(file);
+    });
+    const res = await callServer(s.url, { action: 'upload', fileName: file.name, mimeType: file.type || '', data });
+    addMsg('memo', '資料をアップロードしました：' + res.name);
+    busy = false;
+    const reply = res.name + ' を受け取りました。' + (res.note ? res.note : '内容について聞いてください。');
+    lastReply = { reply };
+    setCaption('hayato', reply);
+    if (s.speak) speakReply({ reply }); else doneSpeaking();
+  } catch (err) {
+    busy = false;
+    showError('アップロードに失敗しました：' + err.message);
+    doneSpeaking();
+  } finally {
+    busy = false; btnSend.disabled = false; btnMic.disabled = false; $('btnUpload').disabled = false;
+    document.body.classList.remove('busy');
+  }
+});
+
+// --- 起動時 ---
+renderSpeakBtn();
+setStatus('idle');
+setGateMode('register');
+(function start() {
+  const s = loadSettings();
+  if (!s.url || !s.user || !s.password) { if (s.user) setGateMode('login'); showGate('form'); return; }
+  setCaption('hayato', s.user + 'さん、ご用件をどうぞ。');
+  checkApproval();   // 承認の状態を確かめる（承認済みなら何も出さない）
+})();
+</script>
+</body>
+</html>
