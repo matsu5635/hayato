@@ -25,17 +25,13 @@
             mask-image: linear-gradient(to right, transparent, #000 4%, #000 96%, transparent);
   }
   #stage video.show { opacity: 1; }
-  /* スマホ（縦長）：動画を画面幅の約290%にして、キャラクターを大きく。上下はぼかす */
+  /* 縦長：動画の幅は「画面の高さの110%」（細長いときは画面幅の290%まで）。キャラクターが高さの6割ほどに収まる。上下はぼかす */
   @media (orientation: portrait) {
     #stage video {
-      top: 46%; bottom: auto; left: 50%; right: auto; width: 290vw; height: auto; transform: translate(-50%, -50%);
+      top: 46%; bottom: auto; left: 50%; right: auto; width: min(290vw, 110vh); height: auto; transform: translate(-50%, -50%);
       -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
               mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
     }
-  }
-  /* 縦長でも幅が広い画面（PC の縦長ウィンドウ・タブレット）は、290vw だと大きすぎるので高さを基準にする */
-  @media (orientation: portrait) and (min-width: 600px) {
-    #stage video { width: 110vh; }
   }
 
   /* ---- 上：タイトルとボタン ---- */
