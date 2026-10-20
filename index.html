@@ -157,6 +157,8 @@
   #choreiState.rec::before { content: '●'; color: #f06a6a; margin-right: 6px; animation: blink 1.2s infinite; }
   @keyframes blink { 50% { opacity: .2; } }
   #chorei .chorei-note { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  #chorei .chorei-opt { display: block; font-size: 13px; margin-bottom: 10px; cursor: pointer; }
+  #chorei .chorei-opt span { display: block; color: var(--muted); font-size: 12px; margin-left: 22px; }
   #chorei .chorei-btns { display: flex; gap: 8px; flex-wrap: wrap; }
   #chorei .chorei-btns .send { padding: 8px 14px; }
   #uploadMenu { position: fixed; z-index: 8; display: flex; flex-direction: column; gap: 4px; padding: 6px;
@@ -250,6 +252,8 @@
   <div class="chorei-note">「開始」を押したら、<b>Meet の朝礼のタブ</b>を選び、<b>「タブの音声も共有する」</b>にチェックを入れてください。
     あなたのマイクの声もあわせて聞き取ります。音声は聞き取りだけに使い、録音は残しません。<br>
     ハヤトの総評を皆さんに聞かせるには、Meet で<b>このハヤトのタブを「画面を共有」</b>してください（タブの音声も共有）。</div>
+  <label class="chorei-opt"><input type="checkbox" id="choreiDedicated"> この PC はハヤト専用（Meet にハヤトとして参加している）
+    <span>マイクは使わず、Meet の音声をこの PC のスピーカーから出さずに聞き取ります（ハヤトの声が Meet に戻って来ないように）</span></label>
   <div class="chorei-btns">
     <button type="button" class="send" id="choreiStart">開始</button>
     <button type="button" class="send" id="choreiReview" disabled>総評お願い</button>
@@ -988,7 +992,11 @@ async function askHayatoStream(s, text, turn, mine) {
 const chorei = { rec: null, chunks: [], streams: [], ctx: null, started: 0, timer: 0 };
 const CAN_CHOREI = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && 'MediaRecorder' in window;
 $('btnChorei').hidden = !CAN_CHOREI;
-$('btnChorei').addEventListener('click', () => { $('chorei').hidden = !$('chorei').hidden; });
+$('btnChorei').addEventListener('click', () => {
+  $('choreiDedicated').checked = !!loadSettings().choreiDedicated;
+  $('chorei').hidden = !$('chorei').hidden;
+});
+$('choreiDedicated').addEventListener('change', () => { const s = loadSettings(); s.choreiDedicated = $('choreiDedicated').checked; saveSettings(s); });
 $('choreiClose').addEventListener('click', () => { if (chorei.rec && !confirm('聞き取りをやめますか？（まとめは作りません）')) return; choreiStop(); $('chorei').hidden = true; });
 
 function choreiState(text, rec) {
@@ -1013,13 +1021,18 @@ $('choreiStart').addEventListener('click', async () => {
   if (!isCloudRun(s.url)) { toast('朝礼モードは Cloud Run 版の接続先でだけ使えます。'); return; }
   try {
     // Meet のタブ（音声つき）を選んでもらう。映像は使わない
-    const tab = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false }, preferCurrentTab: false, selfBrowserSurface: 'exclude', systemAudio: 'include' });
+    const dedicated = $('choreiDedicated').checked;
+    // ハヤト専用 PC では、Meet の音声をスピーカーから出さずに聞き取る（suppressLocalAudioPlayback）
+    const tab = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false, suppressLocalAudioPlayback: dedicated },
+                                                              preferCurrentTab: false, selfBrowserSurface: 'exclude', systemAudio: 'include' });
     chorei.streams.push(tab);
     if (!tab.getAudioTracks().length) { choreiStop(); toast('タブの音声が共有されていません。「タブの音声も共有する」にチェックを入れて、もう一度開始してください。'); return; }
     tab.getVideoTracks().forEach(t => t.stop());
     // 自分の声は Meet のタブには流れないので、マイクもあわせて録る（使えなければタブだけ）
     let mic = null;
-    try { mic = await navigator.mediaDevices.getUserMedia({ audio: true }); chorei.streams.push(mic); } catch (e) { /* マイク無しでも続ける */ }
+    if (!dedicated) {   // ハヤト専用 PC は、全員の声が Meet のタブから来るのでマイクは使わない
+      try { mic = await navigator.mediaDevices.getUserMedia({ audio: true }); chorei.streams.push(mic); } catch (e) { /* マイク無しでも続ける */ }
+    }
     const ctx = new AudioContext();
     const dest = ctx.createMediaStreamDestination();
     ctx.createMediaStreamSource(new MediaStream(tab.getAudioTracks())).connect(dest);
@@ -1039,7 +1052,7 @@ $('choreiStart').addEventListener('click', async () => {
     $('btnChorei').classList.add('on');
     const tick = () => {
       const sec = Math.floor((Date.now() - chorei.started) / 1000);
-      choreiState('聞き取り中 ' + Math.floor(sec / 60) + '分' + String(sec % 60).padStart(2, '0') + '秒' + (mic ? '' : '（マイクなし）'), true);
+      choreiState('聞き取り中 ' + Math.floor(sec / 60) + '分' + String(sec % 60).padStart(2, '0') + '秒' + (dedicated ? '（ハヤト専用）' : mic ? '' : '（マイクなし）'), true);
       if (sec >= 40 * 60) $('choreiReview').click();   // 長すぎると送れないので、40分で区切る
     };
     tick();
