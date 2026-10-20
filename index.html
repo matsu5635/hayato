@@ -132,6 +132,18 @@
   dialog ul.memories span { color: var(--muted); font-size: 11px; margin-right: 6px; }
   dialog a { color: var(--accent); }
 
+  /* ---- 資料の「開く」ボタンと PDF の表示 ---- */
+  #talkHayato .files { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  #talkHayato .files button { text-align: left; background: rgba(79, 179, 217, .12); border: 1px solid rgba(79, 179, 217, .45); color: var(--text);
+                              border-radius: 2px; padding: 8px 10px; font-size: 13px; cursor: pointer; }
+  #talkHayato .files button.wait { background: none; border-color: var(--line); color: var(--muted); }
+  #viewer { position: fixed; inset: 0; z-index: 9; display: flex; flex-direction: column; background: rgba(9, 15, 28, .96); }
+  #viewer[hidden] { display: none; }
+  #viewer .bar { display: flex; align-items: center; gap: 8px; padding: calc(10px + env(safe-area-inset-top)) 12px 10px; border-bottom: 1px solid var(--line); }
+  #viewer .bar .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+  #viewer iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+  #viewer .fallback { flex: 1; display: grid; place-items: center; padding: 24px; text-align: center; line-height: 1.8; }
+
   /* ---- 初回の登録・ログイン・承認待ち ---- */
   #gate { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 16px;
           background: rgba(9, 15, 28, .82); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
@@ -202,6 +214,17 @@
     <textarea id="input" rows="1" placeholder="話しかける（Enterで送信）"></textarea>
     <button class="send" id="btnSend" type="submit">送信</button>
   </form>
+</div>
+
+<!-- 資料（PDF）の表示 -->
+<div id="viewer" hidden>
+  <div class="bar">
+    <span class="name" id="viewerName"></span>
+    <a class="icon-btn" id="viewerSave" download>保存</a>
+    <button class="icon-btn" id="viewerClose" type="button">閉じる</button>
+  </div>
+  <iframe id="viewerFrame" title="資料"></iframe>
+  <div class="fallback" id="viewerFallback" hidden>この端末では画面の中に PDF を表示できません。<br>上の「保存」を押すと、PDF を開くアプリで見られます。</div>
 </div>
 
 <!-- 初回の登録・ログイン・承認待ち（使えるようになるまで、ハヤトの上に重ねて出す） -->
@@ -586,6 +609,7 @@ async function speakReply(data) {
 function replayLast() {
   if (!lastReply || busy) return;
   setCaption('hayato', lastReply.shown || lastReply.reply);
+  renderFileButtons(lastReply.files);
   speakReply(lastReply);
 }
 
@@ -650,10 +674,11 @@ async function askHayato(text) {
     history.push({ role: 'assistant', content: data.reply });
     // 画面には、読み上げる文章に加えて、在庫・天気などの内訳の箇条書き（サーバーがデータから作ったもの）を出す
     const shown = data.display ? data.reply + '\n\n' + data.display : data.reply;
-    lastReply = { reply: data.reply, shown, speech: data.speech, audio: data.audio, ttsError: data.ttsError };
+    lastReply = { reply: data.reply, shown, files: data.files || [], speech: data.speech, audio: data.audio, ttsError: data.ttsError };
     (data.trace || []).forEach(t => addMsg('memo', '（' + t + '）'));   // 何を調べて答えたか
     addMsg('hayato', shown);
     setCaption('hayato', shown);
+    renderFileButtons(data.files);
     if (s.speak) speakReply(data);
     else doneSpeaking();
     if (s.memory) rememberInBackground(s, text, data.reply);
@@ -1060,6 +1085,63 @@ $('fileInput').addEventListener('change', async () => {
     busy = false; btnSend.disabled = false; btnMic.disabled = false; $('btnUpload').disabled = false;
     document.body.classList.remove('busy');
   }
+});
+
+// ============================================================
+// 会社版：資料の「開く」ボタンと PDF の表示
+//   PDF は GAS が権限を確かめてから送ってくる（自分の資料か、会社資料で管理者の許可があるときだけ）
+// ============================================================
+function renderFileButtons(files) {
+  if (!files || !files.length) return;
+  const box = document.createElement('div');
+  box.className = 'files';
+  files.forEach(f => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = f.state === '開ける' ? '' : 'wait';
+    b.textContent = '📄 ' + f.name + (f.state === '開ける' ? '　開く' : f.state === '許可待ち' ? '（許可待ち・押すと確認）' : '（開けません）');
+    b.addEventListener('click', () => openDocument(f, b));
+    box.appendChild(b);
+  });
+  talkHayato.appendChild(box);
+}
+
+let viewerUrl = '';
+async function openDocument(f, button) {
+  const s = loadSettings();
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = '📄 ' + f.name + '　読み込み中…';
+  try {
+    const res = await callServer(s.url, { action: 'file', fileId: f.id });
+    const bytes = Uint8Array.from(atob(res.data), c => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: res.mimeType || 'application/pdf' });
+    if (viewerUrl) URL.revokeObjectURL(viewerUrl);
+    viewerUrl = URL.createObjectURL(blob);
+    $('viewerName').textContent = res.name;
+    $('viewerSave').href = viewerUrl;
+    $('viewerSave').download = res.name;
+    // Android の Chrome は画面の中に PDF を出せないので、保存して開いてもらう
+    const inline = !/Android/i.test(navigator.userAgent);
+    $('viewerFrame').hidden = !inline;
+    $('viewerFallback').hidden = inline;
+    $('viewerFrame').src = inline ? viewerUrl : 'about:blank';
+    $('viewer').hidden = false;
+    f.state = '開ける';
+    button.className = '';
+    button.textContent = '📄 ' + f.name + '　開く';
+    addMsg('memo', '資料を開きました：' + res.name);
+  } catch (err) {
+    button.textContent = label;
+    toast(err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$('viewerClose').addEventListener('click', () => {
+  $('viewer').hidden = true;
+  $('viewerFrame').src = 'about:blank';
 });
 
 // --- 起動時 ---
