@@ -225,7 +225,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M21 12.5l-8.5 8.5a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.3-8.3"/></svg>
     </button>
-    <input type="file" id="fileInput" hidden multiple accept=".pdf,.txt,.csv,.md,application/pdf,text/*">
+    <input type="file" id="fileInput" hidden multiple accept=".pdf,.txt,.csv,.md,.doc,.docx,.xls,.xlsx,.ppt,.pptx,application/pdf,text/*,image/*">
     <input type="file" id="folderInput" hidden webkitdirectory multiple>
     <textarea id="input" rows="1" placeholder="話しかける（Enterで送信）"></textarea>
     <button class="send" id="btnSend" type="submit">送信</button>
@@ -756,6 +756,8 @@ async function askHayato(text) {
       system: HAYATO_PERSONA,
       messages: history.slice(-MAX_HISTORY),
       speak: false,   // 声は返事の文字を出してから別に取る（文字を早く出すため）
+      attached: attachedNow().map(f => f.id),          // 30分以内に送った資料（「これを精査して」用）
+      attachedNames: attachedNow().map(f => f.name),
       voice: s.voice,
     });
     busy = false;
@@ -1225,6 +1227,25 @@ function readBase64(file) {
 }
 
 // 1件ずつ順番に送る（GAS は1回で送れる大きさに限りがあるため）。途中で失敗したものは飛ばして続ける
+let recentUploads = null;   // { files: [{id, name}], at }
+const RECENT_UPLOAD_MS = 30 * 60 * 1000;
+function attachedNow() {
+  return recentUploads && Date.now() - recentUploads.at < RECENT_UPLOAD_MS ? recentUploads.files : [];
+}
+// 送った資料の下に「精査する」ボタンを出す（押すと「〇〇を精査して」と頼んだのと同じ）
+function renderReviewButton() {
+  const files = attachedNow();
+  if (!files.length) return;
+  const box = document.createElement('div');
+  box.className = 'files';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = '🔍 ' + (files.length === 1 ? files[0].name : files.length + '件の資料') + '　を精査する';
+  b.addEventListener('click', () => { if (!busy) askHayato((files.length === 1 ? files[0].name : '今送った資料') + 'を精査して'); });
+  box.appendChild(b);
+  setTimeout(() => talkHayato.appendChild(box), 0);
+}
+
 async function uploadFiles(items, folderName) {
   const skipped = [];
   const list = items.filter(it => {
@@ -1246,7 +1267,7 @@ async function uploadFiles(items, folderName) {
   setCaption('user', what);
   setCaption('hayato', '');
   stage.startSearch();
-  const done = [], failed = [], notes = new Set();
+  const done = [], failed = [], notes = new Set(), sent = [];
   // 送っている途中で画面を閉じようとしたら、止まることを知らせる
   const warn = e => { e.preventDefault(); e.returnValue = ''; };
   window.addEventListener('beforeunload', warn);
@@ -1259,6 +1280,7 @@ async function uploadFiles(items, folderName) {
         const data = await readBase64(file);
         const res = await callServer(s.url, { action: 'upload', fileName: file.name, mimeType: file.type || '', data, path });
         done.push(res.name);
+        if (res.id) sent.push({ id: res.id, name: res.name });
         if (res.note) notes.add(res.note);
       } catch (err) {
         failed.push(file.name + '（' + err.message + '）');
@@ -1272,7 +1294,9 @@ async function uploadFiles(items, folderName) {
     else reply = (folderName ? 'フォルダー「' + folderName + '」の資料を' : '資料を') + done.length + '件受け取りました。';
     if (failed.length) reply += '送れなかったもの ' + failed.length + '件：' + failed.slice(0, 5).join('、') + (failed.length > 5 ? ' ほか' : '') + '。';
     if (skipped.length) reply += '送らなかったもの：' + skipped.slice(0, 5).join('、') + (skipped.length > 5 ? ' ほか' : '') + '。';
-    if (done.length) reply += notes.size ? [...notes].join('') : '内容について聞いてください。';
+    if (done.length) reply += notes.size ? [...notes].join('') : '内容について聞くか、「精査して」と言ってください。';
+    // 送った資料は30分のあいだ「今送った資料」として、次の質問に添える（「これを精査して」で使えるように）
+    if (sent.length) { recentUploads = { files: sent.slice(0, 5), at: Date.now() }; renderReviewButton(); }
     setCaption('hayato', reply);
     // 画面で作った返事も、ハヤトの声（Google の読み上げ）で読む。取れなければブラウザの声
     lastReply = { reply };
