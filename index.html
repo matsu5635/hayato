@@ -622,7 +622,23 @@ async function speakReply(data) {
   } else if (data.ttsError) {
     notice('Google の読み上げに失敗したため、ブラウザの声で読みました：' + data.ttsError);
   } else if (data.speak !== false) {
-    notice('サーバーから音声が届かなかったため、ブラウザの声で読みました。');
+    // 返事に音声が付いていなかった：音声だけをもう一度頼む（届けばハヤトの声で読む）
+    const text = data.reply || '';
+    let why = '返事に音声が付いていませんでした（返事の長さ ' + text.length + ' 文字）';
+    if (text.trim()) {
+      try {
+        const s = loadSettings();
+        const { audio } = await callServer(s.url, { action: 'tts', text, voice: s.voice });
+        data.audio = audio;
+        if (lastReply && lastReply.reply === data.reply) lastReply.audio = audio;
+        await playAudio(audio);
+        addMsg('memo', '（' + why + '。音声だけを取り直して読みました）');
+        return;
+      } catch (e) {
+        why += '。取り直しも失敗：' + e.message;
+      }
+    }
+    notice('サーバーから音声が届かなかったため、ブラウザの声で読みました（' + why + '）');
   }
   speakWithBrowser(data.speech || data.reply);   // speech は製品コードなどを1桁ずつ読む形にした文
 }
