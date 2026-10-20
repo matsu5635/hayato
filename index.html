@@ -149,6 +149,16 @@
   #viewer .pages { flex: 1; overflow: auto; padding: 12px; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   #viewer .pages canvas, #viewer .pages img { display: block; margin: 0 auto 12px; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.4); pointer-events: none; }
   #viewer .pages .msg { padding: 24px; text-align: center; line-height: 1.8; color: var(--muted); }
+  #chorei { position: fixed; z-index: 8; top: calc(56px + env(safe-area-inset-top)); right: 12px; width: min(420px, calc(100vw - 24px));
+            background: #0c1426; border: 1px solid var(--accent); border-radius: 6px; padding: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.5); font-size: 14px; line-height: 1.7; }
+  #chorei[hidden] { display: none; }
+  #chorei .chorei-title { color: var(--accent); letter-spacing: .2em; font-size: 12px; margin-bottom: 4px; }
+  #choreiState { font-size: 16px; margin-bottom: 6px; }
+  #choreiState.rec::before { content: '●'; color: #f06a6a; margin-right: 6px; animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+  #chorei .chorei-note { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  #chorei .chorei-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  #chorei .chorei-btns .send { padding: 8px 14px; }
   #uploadMenu { position: fixed; z-index: 8; display: flex; flex-direction: column; gap: 4px; padding: 6px;
                 background: #0c1426; border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
   #uploadMenu[hidden] { display: none; }
@@ -201,6 +211,7 @@
 <header>
   <h1>AI HAYATO</h1>
   <div>
+    <button class="icon-btn" id="btnChorei" title="朝礼モード（Meet の朝礼を聞き取り、メモと総評を作る。PC の Chrome・Edge だけ）" hidden>朝礼</button>
     <button class="icon-btn" id="btnSpeak" title="読み上げのオン／オフ">読み上げ</button>
     <button class="icon-btn" id="btnHistory" title="これまでの会話">履歴</button>
     <button class="icon-btn" id="btnClear" title="会話をリセット">リセット</button>
@@ -230,6 +241,20 @@
     <textarea id="input" rows="1" placeholder="話しかける（Enterで送信）"></textarea>
     <button class="send" id="btnSend" type="submit">送信</button>
   </form>
+</div>
+
+<!-- 朝礼モード（Meet の朝礼を聞き取る） -->
+<div id="chorei" hidden>
+  <div class="chorei-title">朝礼モード</div>
+  <div id="choreiState">聞き取っていません</div>
+  <div class="chorei-note">「開始」を押したら、<b>Meet の朝礼のタブ</b>を選び、<b>「タブの音声も共有する」</b>にチェックを入れてください。
+    あなたのマイクの声もあわせて聞き取ります。音声は聞き取りだけに使い、録音は残しません。<br>
+    ハヤトの総評を皆さんに聞かせるには、Meet で<b>このハヤトのタブを「画面を共有」</b>してください（タブの音声も共有）。</div>
+  <div class="chorei-btns">
+    <button type="button" class="send" id="choreiStart">開始</button>
+    <button type="button" class="send" id="choreiReview" disabled>総評お願い</button>
+    <button type="button" class="icon-btn" id="choreiClose">閉じる</button>
+  </div>
 </div>
 
 <!-- 📎 を押したときの選択（PC だけ。スマホはフォルダーを選べないので、すぐファイル選択） -->
@@ -952,6 +977,144 @@ async function askHayatoStream(s, text, turn, mine) {
       busy = false; btnSend.disabled = false; btnMic.disabled = false;
       if (!matchMedia('(pointer: coarse)').matches) input.focus();
     }
+  }
+}
+
+// ============================================================
+// 朝礼モード：Meet のタブの音声＋自分のマイクを録り、「総評お願い」でまとめて送る
+//   サーバー（Cloud Run 版）が、予定・注意事項を「朝礼メモ」に残し、総評（約2分）を返す → ハヤトが読み上げる
+//   録音はブラウザのメモリにだけ置き、送ったら捨てる（ファイルには残さない）
+// ============================================================
+const chorei = { rec: null, chunks: [], streams: [], ctx: null, started: 0, timer: 0 };
+const CAN_CHOREI = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && 'MediaRecorder' in window;
+$('btnChorei').hidden = !CAN_CHOREI;
+$('btnChorei').addEventListener('click', () => { $('chorei').hidden = !$('chorei').hidden; });
+$('choreiClose').addEventListener('click', () => { if (chorei.rec && !confirm('聞き取りをやめますか？（まとめは作りません）')) return; choreiStop(); $('chorei').hidden = true; });
+
+function choreiState(text, rec) {
+  $('choreiState').textContent = text;
+  $('choreiState').classList.toggle('rec', !!rec);
+}
+
+function choreiStop() {
+  clearInterval(chorei.timer);
+  if (chorei.rec && chorei.rec.state !== 'inactive') { chorei.rec.onstop = null; chorei.rec.stop(); }
+  chorei.streams.forEach(st => st.getTracks().forEach(t => t.stop()));
+  if (chorei.ctx) chorei.ctx.close().catch(() => {});
+  Object.assign(chorei, { rec: null, chunks: [], streams: [], ctx: null });
+  $('choreiStart').disabled = false;
+  $('choreiReview').disabled = true;
+  $('btnChorei').classList.remove('on');
+  choreiState('聞き取っていません');
+}
+
+$('choreiStart').addEventListener('click', async () => {
+  const s = loadSettings();
+  if (!isCloudRun(s.url)) { toast('朝礼モードは Cloud Run 版の接続先でだけ使えます。'); return; }
+  try {
+    // Meet のタブ（音声つき）を選んでもらう。映像は使わない
+    const tab = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false }, preferCurrentTab: false, selfBrowserSurface: 'exclude', systemAudio: 'include' });
+    chorei.streams.push(tab);
+    if (!tab.getAudioTracks().length) { choreiStop(); toast('タブの音声が共有されていません。「タブの音声も共有する」にチェックを入れて、もう一度開始してください。'); return; }
+    tab.getVideoTracks().forEach(t => t.stop());
+    // 自分の声は Meet のタブには流れないので、マイクもあわせて録る（使えなければタブだけ）
+    let mic = null;
+    try { mic = await navigator.mediaDevices.getUserMedia({ audio: true }); chorei.streams.push(mic); } catch (e) { /* マイク無しでも続ける */ }
+    const ctx = new AudioContext();
+    const dest = ctx.createMediaStreamDestination();
+    ctx.createMediaStreamSource(new MediaStream(tab.getAudioTracks())).connect(dest);
+    if (mic) ctx.createMediaStreamSource(mic).connect(dest);
+    chorei.ctx = ctx;
+    const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+    const rec = new MediaRecorder(dest.stream, { mimeType: type, audioBitsPerSecond: 32000 });
+    chorei.chunks = [];
+    rec.ondataavailable = e => { if (e.data && e.data.size) chorei.chunks.push(e.data); };
+    rec.start(5000);
+    chorei.rec = rec;
+    chorei.started = Date.now();
+    // 共有を止められたら（Meet のタブを閉じた等）聞き取りも終わる
+    tab.getAudioTracks()[0].addEventListener('ended', () => { if (chorei.rec) choreiState('Meet の音声の共有が止まりました。「総評お願い」でまとめられます。', false); });
+    $('choreiStart').disabled = true;
+    $('choreiReview').disabled = false;
+    $('btnChorei').classList.add('on');
+    const tick = () => {
+      const sec = Math.floor((Date.now() - chorei.started) / 1000);
+      choreiState('聞き取り中 ' + Math.floor(sec / 60) + '分' + String(sec % 60).padStart(2, '0') + '秒' + (mic ? '' : '（マイクなし）'), true);
+      if (sec >= 40 * 60) $('choreiReview').click();   // 長すぎると送れないので、40分で区切る
+    };
+    tick();
+    chorei.timer = setInterval(tick, 1000);
+  } catch (err) {
+    choreiStop();
+    if (err && err.name !== 'NotAllowedError') toast('聞き取りを始められませんでした：' + err.message);
+  }
+});
+
+$('choreiReview').addEventListener('click', async () => {
+  const rec = chorei.rec;
+  if (!rec || busy) return;
+  clearInterval(chorei.timer);
+  $('choreiReview').disabled = true;
+  choreiState('朝礼をまとめています…（30秒ほど）', false);
+  const blob = await new Promise(ok => {
+    rec.onstop = () => ok(new Blob(chorei.chunks, { type: rec.mimeType || 'audio/webm' }));
+    rec.stop();
+  });
+  const mime = blob.type;
+  chorei.streams.forEach(st => st.getTracks().forEach(t => t.stop()));
+  if (chorei.ctx) chorei.ctx.close().catch(() => {});
+  chorei.rec = null;
+  const s = loadSettings();
+  busy = true; btnSend.disabled = true; btnMic.disabled = true;
+  stage.startSearch();
+  setStatus('thinking');
+  $('status').textContent = '朝礼をまとめています。';
+  setCaption('user', '📋 朝礼の総評をお願いします');
+  setCaption('hayato', '');
+  addMsg('user', '朝礼の総評をお願いします（' + Math.round((Date.now() - chorei.started) / 60000) + '分の朝礼）');
+  try {
+    const data = await readBase64(blob);
+    const res = await callServer(s.url, { action: 'chorei', audio: data, mimeType: mime });
+    busy = false;
+    const total = res.まとめ.総評;
+    const shown = total + '\n\n' + res.display;
+    addMsg('memo', '（朝礼メモに ' + res.saved + '件を残しました' + (res.chat ? '・Chat に送りました' : '') + (res.timing ? '：' + res.timing.join('・') : '') + '）');
+    addMsg('hayato', shown);
+    setCaption('hayato', shown);
+    history.push({ role: 'user', content: '朝礼の総評をお願いします' }, { role: 'assistant', content: total });
+    lastReply = { reply: total, shown };
+    choreiState('まとめました。朝礼メモと Chat に残しました。', false);
+    if (s.speak) await speakLong(s, total); else doneSpeaking();
+  } catch (err) {
+    busy = false;
+    showError('朝礼をまとめられませんでした：' + err.message);
+    choreiState('まとめられませんでした：' + err.message, false);
+    doneSpeaking();
+  } finally {
+    busy = false; btnSend.disabled = false; btnMic.disabled = false;
+    chorei.streams = []; chorei.chunks = []; chorei.ctx = null;
+    $('choreiStart').disabled = false;
+    $('btnChorei').classList.remove('on');
+  }
+});
+
+// 長い文を、最初の一文だけ先に声にして読み始め、その間に残りを作って続ける
+async function speakLong(s, text) {
+  const [head, rest] = splitFirstSentence(text);
+  let audio = null;
+  try { audio = (await callServer(s.url, { action: 'tts', text: head, voice: s.voice })).audio; } catch (e) { /* ブラウザの声で読む */ }
+  if (!audio) { speakReply({ reply: text }); return; }
+  lastReply.audio = audio;
+  speakReply({ reply: head, audio });
+  if (!rest) return;
+  moreAudioComing = true;
+  try {
+    const r2 = await callServer(s.url, { action: 'tts', text: rest, voice: s.voice });
+    lastReply.audio = [].concat(audio, r2.audio);
+    appendAudio(r2.audio);
+  } catch (e) {
+    addMsg('memo', '（続きの声を作れませんでした：' + e.message + '）');
+    appendAudio([]);
   }
 }
 
