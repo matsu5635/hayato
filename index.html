@@ -149,6 +149,11 @@
   #viewer .pages { flex: 1; overflow: auto; padding: 12px; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   #viewer .pages canvas, #viewer .pages img { display: block; margin: 0 auto 12px; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.4); pointer-events: none; }
   #viewer .pages .msg { padding: 24px; text-align: center; line-height: 1.8; color: var(--muted); }
+  #uploadMenu { position: fixed; z-index: 8; display: flex; flex-direction: column; gap: 4px; padding: 6px;
+                background: #0c1426; border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  #uploadMenu[hidden] { display: none; }
+  #uploadMenu button { text-align: left; background: none; border: 0; color: var(--text); padding: 10px 12px; font-size: 14px; cursor: pointer; border-radius: 2px; }
+  #uploadMenu button:hover { background: rgba(79, 179, 217, .15); }
   #viewer .zoom { min-width: 40px; }
   #viewer .zoom[hidden] { display: none; }
   #viewer .pages img.cam { width: 100%; max-width: 960px; height: auto; }
@@ -220,10 +225,17 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M21 12.5l-8.5 8.5a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.3-8.3"/></svg>
     </button>
-    <input type="file" id="fileInput" hidden accept=".pdf,.txt,.csv,.md,application/pdf,text/*">
+    <input type="file" id="fileInput" hidden multiple accept=".pdf,.txt,.csv,.md,application/pdf,text/*">
+    <input type="file" id="folderInput" hidden webkitdirectory multiple>
     <textarea id="input" rows="1" placeholder="話しかける（Enterで送信）"></textarea>
     <button class="send" id="btnSend" type="submit">送信</button>
   </form>
+</div>
+
+<!-- 📎 を押したときの選択（PC だけ。スマホはフォルダーを選べないので、すぐファイル選択） -->
+<div id="uploadMenu" hidden>
+  <button type="button" id="pickFiles">📄 ファイルを選ぶ（複数可）</button>
+  <button type="button" id="pickFolder">📁 フォルダーを選ぶ（中身ごと）</button>
 </div>
 
 <!-- 資料（PDF）の表示 -->
@@ -1062,43 +1074,110 @@ $('btnLogout').addEventListener('click', () => {
 // 会社版：資料のアップロード（自分の「資料」フォルダへ）
 // ============================================================
 const UPLOAD_MAX_MB = 20;
-$('btnUpload').addEventListener('click', () => { if (!busy) $('fileInput').click(); });
-$('fileInput').addEventListener('change', async () => {
-  const file = $('fileInput').files[0];
+// フォルダーを選べるのは PC のブラウザだけ（スマホは webkitdirectory を無視してファイル選択になる）
+const CAN_PICK_FOLDER = 'webkitdirectory' in document.createElement('input') && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+// フォルダーの中にある、送らなくてよいファイル（Windows・Mac が勝手に作るもの、Office の一時ファイル）
+const SKIP_FILE = /^(desktop\.ini|thumbs\.db|\.ds_store)$|^~\$|^\./i;
+
+$('btnUpload').addEventListener('click', e => {
+  if (busy) return;
+  if (!CAN_PICK_FOLDER) { $('fileInput').click(); return; }
+  const menu = $('uploadMenu');
+  if (!menu.hidden) { menu.hidden = true; return; }
+  const r = $('btnUpload').getBoundingClientRect();
+  menu.style.left = Math.max(8, r.left) + 'px';
+  menu.style.bottom = (window.innerHeight - r.top + 8) + 'px';
+  menu.hidden = false;
+  e.stopPropagation();
+});
+document.addEventListener('click', e => { if (!$('uploadMenu').contains(e.target)) $('uploadMenu').hidden = true; });
+$('pickFiles').addEventListener('click', () => { $('uploadMenu').hidden = true; $('fileInput').click(); });
+$('pickFolder').addEventListener('click', () => { $('uploadMenu').hidden = true; $('folderInput').click(); });
+
+$('fileInput').addEventListener('change', () => {
+  const files = [...$('fileInput').files];
   $('fileInput').value = '';
-  if (!file) return;
-  if (file.size > UPLOAD_MAX_MB * 1024 * 1024) { showError('ファイルが大きすぎます（' + UPLOAD_MAX_MB + 'MB まで）。'); return; }
+  uploadFiles(files.map(f => ({ file: f, path: '' })), '');
+});
+$('folderInput').addEventListener('change', () => {
+  // webkitRelativePath は「選んだフォルダー/中のフォルダー/ファイル名」。ファイル名を除いた部分を置き場所にする
+  const files = [...$('folderInput').files].map(f => {
+    const parts = (f.webkitRelativePath || f.name).split('/');
+    parts.pop();
+    return { file: f, path: parts.join('/') };
+  });
+  $('folderInput').value = '';
+  const top = files.length ? files[0].path.split('/')[0] : '';
+  uploadFiles(files, top);
+});
+
+function readBase64(file) {
+  return new Promise((ok, ng) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result).split(',')[1] || '');
+    r.onerror = () => ng(new Error('ファイルを読めませんでした'));
+    r.readAsDataURL(file);
+  });
+}
+
+// 1件ずつ順番に送る（GAS は1回で送れる大きさに限りがあるため）。途中で失敗したものは飛ばして続ける
+async function uploadFiles(items, folderName) {
+  const skipped = [];
+  const list = items.filter(it => {
+    if (SKIP_FILE.test(it.file.name)) return false;
+    if (it.file.size > UPLOAD_MAX_MB * 1024 * 1024) { skipped.push(it.file.name + '（' + UPLOAD_MAX_MB + 'MB を超える）'); return false; }
+    if (!it.file.size) { skipped.push(it.file.name + '（空のファイル）'); return false; }
+    return true;
+  });
+  if (!list.length) {
+    if (items.length) showError(skipped.length ? '送れるファイルがありません：' + skipped.join('、') : '送れるファイルがありません。');
+    return;
+  }
   const s = loadSettings();
+  const total = list.length;
+  const what = folderName ? '📁 ' + folderName + '（' + total + '件）' : total === 1 ? '📎 ' + list[0].file.name : '📎 ファイル ' + total + '件';
   // アップロード中は、状態表示とパネルではっきり見せる（キャラクターは「調べ中」の動画）
   busy = true; btnSend.disabled = true; btnMic.disabled = true; $('btnUpload').disabled = true;
-  $('status').textContent = '資料をアップロード中。';
   document.body.classList.add('busy');
-  setCaption('user', '📎 ' + file.name + '（' + Math.max(1, Math.round(file.size / 1024)) + ' KB）');
+  setCaption('user', what);
   setCaption('hayato', '');
   stage.startSearch();
+  const done = [], failed = [], notes = new Set();
+  // 送っている途中で画面を閉じようとしたら、止まることを知らせる
+  const warn = e => { e.preventDefault(); e.returnValue = ''; };
+  window.addEventListener('beforeunload', warn);
   try {
-    const data = await new Promise((ok, ng) => {
-      const r = new FileReader();
-      r.onload = () => ok(String(r.result).split(',')[1] || '');
-      r.onerror = () => ng(new Error('ファイルを読めませんでした'));
-      r.readAsDataURL(file);
-    });
-    const res = await callServer(s.url, { action: 'upload', fileName: file.name, mimeType: file.type || '', data });
-    addMsg('memo', '資料をアップロードしました：' + res.name);
+    for (let i = 0; i < total; i++) {
+      const { file, path } = list[i];
+      $('status').textContent = '資料をアップロード中（' + (i + 1) + ' / ' + total + '）。';
+      if (total > 1) setCaption('hayato', total + '件中 ' + (i + 1) + '件目を送っています…\n' + (path ? path + '/' : '') + file.name);
+      try {
+        const data = await readBase64(file);
+        const res = await callServer(s.url, { action: 'upload', fileName: file.name, mimeType: file.type || '', data, path });
+        done.push(res.name);
+        if (res.note) notes.add(res.note);
+      } catch (err) {
+        failed.push(file.name + '（' + err.message + '）');
+      }
+    }
+    if (done.length) addMsg('memo', '資料をアップロードしました：' + (folderName ? folderName + ' フォルダー ' : '') + done.length + '件' + (done.length <= 5 ? '（' + done.join('、') + '）' : ''));
     busy = false;
-    const reply = res.name + ' を受け取りました。' + (res.note ? res.note : '内容について聞いてください。');
+    let reply;
+    if (!done.length) reply = 'アップロードできませんでした。';
+    else if (total === 1) reply = done[0] + ' を受け取りました。';
+    else reply = (folderName ? 'フォルダー「' + folderName + '」の資料を' : '資料を') + done.length + '件受け取りました。';
+    if (failed.length) reply += '送れなかったもの ' + failed.length + '件：' + failed.slice(0, 5).join('、') + (failed.length > 5 ? ' ほか' : '') + '。';
+    if (skipped.length) reply += '送らなかったもの：' + skipped.slice(0, 5).join('、') + (skipped.length > 5 ? ' ほか' : '') + '。';
+    if (done.length) reply += notes.size ? [...notes].join('') : '内容について聞いてください。';
     lastReply = { reply };
     setCaption('hayato', reply);
     if (s.speak) speakReply({ reply }); else doneSpeaking();
-  } catch (err) {
-    busy = false;
-    showError('アップロードに失敗しました：' + err.message);
-    doneSpeaking();
   } finally {
+    window.removeEventListener('beforeunload', warn);
     busy = false; btnSend.disabled = false; btnMic.disabled = false; $('btnUpload').disabled = false;
     document.body.classList.remove('busy');
   }
-});
+}
 
 // ============================================================
 // 会社版：資料の「開く」ボタンと PDF の表示
