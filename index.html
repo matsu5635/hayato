@@ -536,11 +536,13 @@ function callServer(url, payload) {
 // 接続先が GAS（script.google.com）でなければ Cloud Run 版とみなす（/api と /chat/stream を使う）
 function isCloudRun(url) { return !!url && !/script\.google(usercontent)?\.com/.test(url); }
 function runBase(url) { return String(url).replace(/\/+$/, ''); }
+// 問い合わせ先（Cloud Run なら …/api、GAS ならそのまま）。登録・承認待ちの確認も必ずこれを通す
+function apiUrl(url) { return isCloudRun(url) ? runBase(url) + '/api' : url; }
 
 async function callServerNow(url, payload) {
   const s = loadSettings();
   const body = Object.assign({ user: s.user, password: s.password }, payload);
-  const res = await fetch(isCloudRun(url) ? runBase(url) + '/api' : url, {
+  const res = await fetch(apiUrl(url), {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(body),
@@ -1242,7 +1244,7 @@ async function gateSubmit() {
     const payload = gateMode === 'register'
       ? { action: 'register', user: name, password, invite: $('gateInvite').value.trim() }
       : { action: 'status', user: name, password };
-    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
+    const res = await fetch(apiUrl(url), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
     const data = await res.json();
     if (!data.ok) { $('gateError').textContent = data.error || '登録できませんでした。'; return; }
     // 名前・合言葉・接続先をこの端末に保存（次からは入れなくてよい）
@@ -1274,7 +1276,7 @@ async function checkApproval() {
   const s = loadSettings();
   if (!s.url || !s.user || !s.password) { showGate('form'); return; }
   try {
-    const res = await fetch(s.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    const res = await fetch(apiUrl(s.url), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                                      body: JSON.stringify({ action: 'status', user: s.user, password: s.password }) });
     const data = await res.json();
     if (!data.ok) { showGate('form', data.error); return; }
