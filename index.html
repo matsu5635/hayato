@@ -729,7 +729,7 @@ async function askHayato(text) {
     const data = await callServer(s.url, {
       system: HAYATO_PERSONA,
       messages: history.slice(-MAX_HISTORY),
-      speak: false,   // 声は返事の文字を出してから別に取る（文字を早く出すため）
+      speak: s.speak,   // 声は返事と一緒に受け取る（声だけ別に頼むと、GAS は2秒で終わっているのに画面に届くまで数十秒かかった。2026-10-20）
       voice: s.voice,
     });
     busy = false;
@@ -744,25 +744,9 @@ async function askHayato(text) {
     renderFileButtons(data.files);
     renderCameraButtons(data.cameras);
     if (data.cameras && data.cameras.length) openCameras(data.cameras);   // 頼まれた映像はそのまま出す
-    if (s.speak) {
-      // 文字はもう出ているので、声を取ってきて読む（取れなければブラウザの声）
-      setStatus('thinking');
-      $('status').textContent = '声を準備中。';
-      const t0 = Date.now();
-      try {
-        const { audio } = await callServer(s.url, { action: 'tts', text: data.reply, voice: s.voice });
-        data.audio = lastReply.audio = audio;
-        addMsg('memo', '（声の準備 ' + ((Date.now() - t0) / 1000).toFixed(1) + '秒）');
-      } catch (err) {
-        data.ttsError = lastReply.ttsError = err.message;
-      }
-      if (s.memory) rememberInBackground(s, text, data.reply);   // 記憶の更新は、声を取ったあと（同時に送らない）
-      if (turn !== askTurn) return;   // 声を待つ間に次の質問をした
-      speakReply(data);
-    } else {
-      if (s.memory) rememberInBackground(s, text, data.reply);
-      doneSpeaking();
-    }
+    if (s.speak) speakReply(data);
+    else doneSpeaking();
+    if (s.memory) rememberInBackground(s, text, data.reply);
   } catch (err) {
     busy = false;
     mine.remove();
