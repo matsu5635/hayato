@@ -677,6 +677,7 @@ async function rememberInBackground(s, userText, reply) {
   }
 }
 
+let askTurn = 0;   // 何回目の質問か（声の準備中に次の質問が来たら、古い返事の声は読まない）
 async function askHayato(text) {
   const s = loadSettings();
   if (!s.url || !s.user || !s.password) {
@@ -694,6 +695,7 @@ async function askHayato(text) {
   }
 
   stopSpeaking();
+  const turn = ++askTurn;
   history.push({ role: 'user', content: text });
   const mine = addMsg('user', text);
   setCaption('user', text);
@@ -706,7 +708,7 @@ async function askHayato(text) {
     const data = await callServer(s.url, {
       system: HAYATO_PERSONA,
       messages: history.slice(-MAX_HISTORY),
-      speak: s.speak,
+      speak: false,   // 声は返事の文字を出してから別に取る（文字を早く出すため）
       voice: s.voice,
     });
     busy = false;
@@ -715,14 +717,28 @@ async function askHayato(text) {
     const shown = data.display ? data.reply + '\n\n' + data.display : data.reply;
     lastReply = { reply: data.reply, shown, files: data.files || [], cameras: data.cameras || [], speech: data.speech, audio: data.audio, ttsError: data.ttsError };
     (data.trace || []).forEach(t => addMsg('memo', '（' + t + '）'));   // 何を調べて答えたか
+    if (data.timing && data.timing.length) addMsg('memo', '（かかった時間：' + data.timing.join('・') + '）');
     addMsg('hayato', shown);
     setCaption('hayato', shown);
     renderFileButtons(data.files);
     renderCameraButtons(data.cameras);
     if (data.cameras && data.cameras.length) openCameras(data.cameras);   // 頼まれた映像はそのまま出す
-    if (s.speak) speakReply(data);
-    else doneSpeaking();
     if (s.memory) rememberInBackground(s, text, data.reply);
+    if (s.speak) {
+      // 文字はもう出ているので、声を取ってきて読む（取れなければブラウザの声）
+      setStatus('thinking');
+      $('status').textContent = '声を準備中。';
+      const t0 = Date.now();
+      try {
+        const { audio } = await callServer(s.url, { action: 'tts', text: data.reply, voice: s.voice });
+        data.audio = lastReply.audio = audio;
+        addMsg('memo', '（声の準備 ' + ((Date.now() - t0) / 1000).toFixed(1) + '秒）');
+      } catch (err) {
+        data.ttsError = lastReply.ttsError = err.message;
+      }
+      if (turn !== askTurn) return;   // 声を待つ間に次の質問をした
+      speakReply(data);
+    } else doneSpeaking();
   } catch (err) {
     busy = false;
     mine.remove();
