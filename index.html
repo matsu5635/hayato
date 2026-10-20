@@ -150,6 +150,8 @@
   #viewer .pages canvas, #viewer .pages img { display: block; margin: 0 auto 12px; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.4); pointer-events: none; }
   #viewer .pages .msg { padding: 24px; text-align: center; line-height: 1.8; color: var(--muted); }
   #viewer .zoom { min-width: 40px; }
+  #viewer .zoom[hidden] { display: none; }
+  #viewer .pages img.cam { width: 100%; max-width: 960px; height: auto; }
   @media print { body { display: none !important; } }
 
   /* ---- 初回の登録・ログイン・承認待ち ---- */
@@ -618,6 +620,7 @@ function replayLast() {
   if (!lastReply || busy) return;
   setCaption('hayato', lastReply.shown || lastReply.reply);
   renderFileButtons(lastReply.files);
+  renderCameraButtons(lastReply.cameras);
   speakReply(lastReply);
 }
 
@@ -682,11 +685,13 @@ async function askHayato(text) {
     history.push({ role: 'assistant', content: data.reply });
     // 画面には、読み上げる文章に加えて、在庫・天気などの内訳の箇条書き（サーバーがデータから作ったもの）を出す
     const shown = data.display ? data.reply + '\n\n' + data.display : data.reply;
-    lastReply = { reply: data.reply, shown, files: data.files || [], speech: data.speech, audio: data.audio, ttsError: data.ttsError };
+    lastReply = { reply: data.reply, shown, files: data.files || [], cameras: data.cameras || [], speech: data.speech, audio: data.audio, ttsError: data.ttsError };
     (data.trace || []).forEach(t => addMsg('memo', '（' + t + '）'));   // 何を調べて答えたか
     addMsg('hayato', shown);
     setCaption('hayato', shown);
     renderFileButtons(data.files);
+    renderCameraButtons(data.cameras);
+    if (data.cameras && data.cameras.length) openCameras(data.cameras);   // 頼まれた映像はそのまま出す
     if (s.speak) speakReply(data);
     else doneSpeaking();
     if (s.memory) rememberInBackground(s, text, data.reply);
@@ -1158,7 +1163,63 @@ async function renderPages() {
   }
 }
 
+// ============================================================
+// 号機のカメラ（Wチェックシステムのライブ映像）
+//   映像は Wチェックのミニ PC から直接読む（ハヤトのサーバーは通らない）。社内の Wi-Fi でだけ映る
+//   Wチェックは自前の証明書なので、初めての端末では一度 Wチェックの画面を開いて「アクセスする」を押してもらう
+// ============================================================
+function renderCameraButtons(cameras) {
+  if (!cameras || !cameras.length) return;
+  const box = document.createElement('div');
+  box.className = 'files';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = '📷 ' + cameras.map(c => c.machine + ' ' + c.name).join('・') + '　映像を見る';
+  b.addEventListener('click', () => openCameras(cameras));
+  box.appendChild(b);
+  talkHayato.appendChild(box);
+}
+
+function openCameras(cameras) {
+  closeViewer();
+  $('viewerName').textContent = '📷 ' + [...new Set(cameras.map(c => c.machine))].join('・') + ' のカメラ';
+  $('viewerIn').hidden = $('viewerOut').hidden = true;
+  const box = $('viewerPages');
+  cameras.forEach(c => {
+    const cap = document.createElement('div');
+    cap.className = 'msg';
+    cap.style.padding = '4px 0';
+    cap.textContent = c.machine + ' ' + c.name + '（つないでいます…）';
+    const img = new Image();
+    img.className = 'cam';
+    img.alt = c.machine + ' ' + c.name;
+    img.draggable = false;
+    img.onload = () => { cap.textContent = c.machine + ' ' + c.name; };
+    img.onerror = () => {
+      img.remove();
+      cap.innerHTML = '';
+      cap.append(c.machine + ' ' + c.name + '：映像につながりません。', document.createElement('br'),
+        '社内の Wi-Fi につないでいるか確かめてください。初めての端末やミニ PC の再起動後は、');
+      const a = document.createElement('a');
+      a.href = c.base;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = 'Wチェックの画面';
+      a.style.color = 'var(--accent)';
+      cap.append(a, ' を開いて「詳細設定 → アクセスする」を押してから、もう一度開いてください。');
+    };
+    img.src = c.src;
+    // 社外などで相手に届かないと、エラーにならずに待ち続けることがあるので、10秒で見切る
+    setTimeout(() => { if (img.isConnected && img.onerror && !img.naturalWidth) img.onerror(); }, 10000);
+    box.append(cap, img);
+  });
+  $('viewer').hidden = false;
+}
+
 function closeViewer() {
+  // カメラの映像は流れ続けるので、src を外して接続を切る
+  $('viewerPages').querySelectorAll('img.cam').forEach(img => { img.onerror = null; img.src = ''; });
+  $('viewerIn').hidden = $('viewerOut').hidden = false;
   viewerToken++;
   if (viewerDoc) { viewerDoc.destroy(); viewerDoc = null; }
   $('viewerPages').innerHTML = '';
@@ -1206,8 +1267,8 @@ async function openDocument(f, button) {
 }
 
 $('viewerClose').addEventListener('click', closeViewer);
-$('viewerIn').addEventListener('click', () => { if (viewerZoom < 3) { viewerZoom = Math.round((viewerZoom + 0.5) * 10) / 10; renderPages(); } });
-$('viewerOut').addEventListener('click', () => { if (viewerZoom > 1) { viewerZoom = Math.max(1, viewerZoom - 0.5); renderPages(); } });
+$('viewerIn').addEventListener('click', () => { if (viewerDoc && viewerZoom < 3) { viewerZoom = Math.round((viewerZoom + 0.5) * 10) / 10; renderPages(); } });
+$('viewerOut').addEventListener('click', () => { if (viewerDoc && viewerZoom > 1) { viewerZoom = Math.max(1, viewerZoom - 0.5); renderPages(); } });
 // 資料の上では右クリック（画像として保存）を出さない
 $('viewer').addEventListener('contextmenu', e => e.preventDefault());
 
