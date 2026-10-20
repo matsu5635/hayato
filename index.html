@@ -141,8 +141,12 @@
   #viewer[hidden] { display: none; }
   #viewer .bar { display: flex; align-items: center; gap: 8px; padding: calc(10px + env(safe-area-inset-top)) 12px 10px; border-bottom: 1px solid var(--line); }
   #viewer .bar .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-  #viewer iframe { flex: 1; width: 100%; border: 0; background: #fff; }
-  #viewer .fallback { flex: 1; display: grid; place-items: center; padding: 24px; text-align: center; line-height: 1.8; }
+  /* 資料は絵（canvas）として描く。保存・長押し・選択・印刷をさせない */
+  #viewer .pages { flex: 1; overflow: auto; padding: 12px; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  #viewer .pages canvas, #viewer .pages img { display: block; margin: 0 auto 12px; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.4); pointer-events: none; }
+  #viewer .pages .msg { padding: 24px; text-align: center; line-height: 1.8; color: var(--muted); }
+  #viewer .zoom { min-width: 40px; }
+  @media print { body { display: none !important; } }
 
   /* ---- 初回の登録・ログイン・承認待ち ---- */
   #gate { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 16px;
@@ -220,11 +224,11 @@
 <div id="viewer" hidden>
   <div class="bar">
     <span class="name" id="viewerName"></span>
-    <a class="icon-btn" id="viewerSave" download>保存</a>
+    <button class="icon-btn zoom" id="viewerOut" type="button" aria-label="縮小">－</button>
+    <button class="icon-btn zoom" id="viewerIn" type="button" aria-label="拡大">＋</button>
     <button class="icon-btn" id="viewerClose" type="button">閉じる</button>
   </div>
-  <iframe id="viewerFrame" title="資料"></iframe>
-  <div class="fallback" id="viewerFallback" hidden>この端末では画面の中に PDF を表示できません。<br>上の「保存」を押すと、PDF を開くアプリで見られます。</div>
+  <div class="pages" id="viewerPages"></div>
 </div>
 
 <!-- 初回の登録・ログイン・承認待ち（使えるようになるまで、ハヤトの上に重ねて出す） -->
@@ -1106,7 +1110,57 @@ function renderFileButtons(files) {
   talkHayato.appendChild(box);
 }
 
-let viewerUrl = '';
+// PDF は PDF.js で 1 ページずつ canvas に描く。ブラウザの PDF ビューア（保存・印刷ボタン付き）は使わない
+const PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+let pdfjsReady = null;
+function loadPdfJs() {
+  if (!pdfjsReady) {
+    pdfjsReady = new Promise((resolve, reject) => {
+      const sc = document.createElement('script');
+      sc.src = PDFJS_URL;
+      sc.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER; resolve(window.pdfjsLib); };
+      sc.onerror = () => { pdfjsReady = null; reject(new Error('資料を表示する部品を読み込めませんでした。通信を確かめてください。')); };
+      document.head.appendChild(sc);
+    });
+  }
+  return pdfjsReady;
+}
+
+let viewerDoc = null;   // 表示中の PDF（PDF.js の文書）
+let viewerZoom = 1;     // 1 = 画面の幅に合わせる
+let viewerToken = 0;    // 描き直しの途中で別の資料・倍率に変わったら、古い方の描画をやめる
+
+async function renderPages() {
+  const box = $('viewerPages');
+  const token = ++viewerToken;
+  box.innerHTML = '';
+  if (!viewerDoc) return;
+  const width = Math.max(200, box.clientWidth - 24) * viewerZoom;
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  for (let n = 1; n <= viewerDoc.numPages; n++) {
+    const page = await viewerDoc.getPage(n);
+    if (token !== viewerToken) return;
+    const base = page.getViewport({ scale: 1 });
+    const vp = page.getViewport({ scale: width / base.width * ratio });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(vp.width);
+    canvas.height = Math.floor(vp.height);
+    canvas.style.width = Math.floor(vp.width / ratio) + 'px';
+    canvas.style.height = Math.floor(vp.height / ratio) + 'px';
+    box.appendChild(canvas);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    if (token !== viewerToken) return;
+  }
+}
+
+function closeViewer() {
+  viewerToken++;
+  if (viewerDoc) { viewerDoc.destroy(); viewerDoc = null; }
+  $('viewerPages').innerHTML = '';
+  $('viewer').hidden = true;
+}
+
 async function openDocument(f, button) {
   const s = loadSettings();
   const label = button.textContent;
@@ -1115,18 +1169,26 @@ async function openDocument(f, button) {
   try {
     const res = await callServer(s.url, { action: 'file', fileId: f.id });
     const bytes = Uint8Array.from(atob(res.data), c => c.charCodeAt(0));
-    const blob = new Blob([bytes], { type: res.mimeType || 'application/pdf' });
-    if (viewerUrl) URL.revokeObjectURL(viewerUrl);
-    viewerUrl = URL.createObjectURL(blob);
+    const mime = res.mimeType || 'application/pdf';
+    closeViewer();
+    viewerZoom = 1;
     $('viewerName').textContent = res.name;
-    $('viewerSave').href = viewerUrl;
-    $('viewerSave').download = res.name;
-    // Android の Chrome は画面の中に PDF を出せないので、保存して開いてもらう
-    const inline = !/Android/i.test(navigator.userAgent);
-    $('viewerFrame').hidden = !inline;
-    $('viewerFallback').hidden = inline;
-    $('viewerFrame').src = inline ? viewerUrl : 'about:blank';
     $('viewer').hidden = false;
+    if (/^image\//.test(mime)) {
+      // 写真などはそのまま 1 枚表示（ダウンロード用のリンクは作らない）
+      const img = new Image();
+      img.src = 'data:' + mime + ';base64,' + res.data;
+      img.style.maxWidth = '100%';
+      img.draggable = false;
+      $('viewerPages').appendChild(img);
+    } else if (/pdf/.test(mime)) {
+      $('viewerPages').innerHTML = '<div class="msg">表示しています…</div>';
+      const pdfjsLib = await loadPdfJs();
+      viewerDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
+      await renderPages();
+    } else {
+      $('viewerPages').innerHTML = '<div class="msg">この形式の資料は画面に表示できません。</div>';
+    }
     f.state = '開ける';
     button.className = '';
     button.textContent = '📄 ' + f.name + '　開く';
@@ -1139,10 +1201,11 @@ async function openDocument(f, button) {
   }
 }
 
-$('viewerClose').addEventListener('click', () => {
-  $('viewer').hidden = true;
-  $('viewerFrame').src = 'about:blank';
-});
+$('viewerClose').addEventListener('click', closeViewer);
+$('viewerIn').addEventListener('click', () => { if (viewerZoom < 3) { viewerZoom = Math.round((viewerZoom + 0.5) * 10) / 10; renderPages(); } });
+$('viewerOut').addEventListener('click', () => { if (viewerZoom > 1) { viewerZoom = Math.max(1, viewerZoom - 0.5); renderPages(); } });
+// 資料の上では右クリック（画像として保存）を出さない
+$('viewer').addEventListener('contextmenu', e => e.preventDefault());
 
 // --- 起動時 ---
 renderSpeakBtn();
