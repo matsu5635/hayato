@@ -590,7 +590,8 @@ player.addEventListener('stalled', () => logPlayback('読み込みが止まっ�
 // 返事を「最初の一文」と「残り」に分ける（短い返事は分けない）
 function splitFirstSentence(text) {
   text = String(text || '');
-  const m = text.match(/^[\s\S]{8,80}?[。！？!?\n]/);
+  // 文の終わり（。！？改行）が80文字以内に無ければ、読点（、）で区切る（材料名が長く続く返事など）
+  const m = text.match(/^[\s\S]{8,80}?[。！？!?\n]/) || text.match(/^[\s\S]{15,60}?[、，,]/);
   if (!m || text.length - m[0].length < 15) return [text, ''];
   return [m[0], text.slice(m[0].length).trim()];
 }
@@ -778,6 +779,10 @@ async function askHayato(text) {
       const t0 = Date.now();
       try {
         const r = await callServer(s.url, { action: 'tts', text: head, voice: s.voice });
+        // 音声が空で返ってきたときは、原因を調べられるよう中身の様子を残す
+        if (!(Array.isArray(r.audio) ? r.audio.filter(Boolean).length : r.audio)) {
+          addMsg('memo', '（声が空で届きました：項目 ' + Object.keys(r).join('・') + '、音声 ' + JSON.stringify(r.audio || null).slice(0, 60) + '）');
+        }
         data.audio = lastReply.audio = r.audio;
         addMsg('memo', '（声の準備 ' + ((Date.now() - t0) / 1000).toFixed(1) + '秒' + (r.timing ? '：' + r.timing.join('・') : '') + (rest ? '、最初の一文' : '') + '）');
       } catch (err) {
