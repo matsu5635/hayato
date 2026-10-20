@@ -526,10 +526,14 @@ function callServer(url, payload) {
   return p;
 }
 
+// 接続先が GAS（script.google.com）でなければ Cloud Run 版とみなす（/api と /chat/stream を使う）
+function isCloudRun(url) { return !!url && !/script\.google(usercontent)?\.com/.test(url); }
+function runBase(url) { return String(url).replace(/\/+$/, ''); }
+
 async function callServerNow(url, payload) {
   const s = loadSettings();
   const body = Object.assign({ user: s.user, password: s.password }, payload);
-  const res = await fetch(url, {
+  const res = await fetch(isCloudRun(url) ? runBase(url) + '/api' : url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(body),
@@ -750,6 +754,7 @@ async function askHayato(text) {
   busy = true; btnSend.disabled = true; btnMic.disabled = true;
   stage.startSearch();
   setStatus('thinking');
+  if (isCloudRun(s.url)) return askHayatoStream(s, text, turn, mine);
 
   try {
     const data = await callServer(s.url, {
@@ -823,6 +828,117 @@ async function askHayato(text) {
   } finally {
     busy = false; btnSend.disabled = false; btnMic.disabled = false;
     if (!matchMedia('(pointer: coarse)').matches) input.focus();   // スマホでは勝手にキーボードを出さない
+  }
+}
+
+// ============================================================
+// Cloud Run 版：返事を流しながら受け取る（文字は届いたそばから出し、声は一文ずつ届いた順に読む）
+//   サーバーからのイベント：text（文字の続き）／audio（index 番目の声）／replace（返事の差し替え）／done（箇条書き・ボタンなど）／error／end
+// ============================================================
+async function askHayatoStream(s, text, turn, mine) {
+  let reply = '', started = false, gotText = false;
+  const audios = {};               // index → 声のかたまり
+  let nextAudio = 0, totalAudio = null, allAudio = [];
+  const t0 = Date.now();
+  const playReady = () => {
+    // 届いた声を、順番どおりに再生の列へ足す（最初は playAudio、2つ目からは続きとして足す）
+    while (audios[nextAudio] !== undefined && turn === askTurn) {
+      const parts = (audios[nextAudio] || []).filter(Boolean);
+      delete audios[nextAudio];
+      nextAudio++;
+      allAudio = allAudio.concat(parts);
+      if (!started) {
+        if (!parts.length) continue;
+        started = true;
+        addMsg('memo', '（声が出るまで ' + ((Date.now() - t0) / 1000).toFixed(1) + '秒）');
+        playAudio(parts).catch(() => {});
+        moreAudioComing = true;
+      } else {
+        moreAudioComing = true;
+        appendAudio(parts);
+        moreAudioComing = true;
+      }
+    }
+    if (totalAudio !== null && nextAudio >= totalAudio && started) appendAudio([]);   // もう続きは無い
+  };
+  try {
+    const res = await fetch(runBase(s.url) + '/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        user: s.user, password: s.password, system: HAYATO_PERSONA, messages: history.slice(-MAX_HISTORY),
+        speak: !!s.speak, voice: s.voice,
+        attached: attachedNow().map(f => f.id), attachedNames: attachedNow().map(f => f.name),
+      }),
+    });
+    if (!res.ok || !res.body) throw new Error('サーバーの応答がありません（HTTP ' + res.status + '）');
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', done = null;
+    for (;;) {
+      const { value, done: end } = await reader.read();
+      if (end) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 2);
+        if (!line.startsWith('data:')) continue;
+        const ev = JSON.parse(line.slice(5));
+        if (turn !== askTurn) continue;   // 次の質問をしたら、古い返事は出さない
+        if (ev.type === 'text') {
+          if (!gotText) { gotText = true; addMsg('memo', '（文字が出るまで ' + ((Date.now() - t0) / 1000).toFixed(1) + '秒）'); }
+          reply += ev.delta;
+          setCaption('hayato', reply);
+        } else if (ev.type === 'replace') {
+          reply = ev.reply;
+          setCaption('hayato', reply);
+        } else if (ev.type === 'audio') {
+          if (ev.error) addMsg('memo', '（声を作れませんでした：' + ev.error + '）');
+          audios[ev.index] = ev.audio || [];
+          playReady();
+        } else if (ev.type === 'done') {
+          done = ev;
+          totalAudio = ev.audioParts || 0;
+          playReady();
+        } else if (ev.type === 'error') {
+          if (ev.needLogin || (ev.status && ev.status !== '承認済み')) showGate(ev.status === '承認待ち' ? 'wait' : 'form', ev.error);
+          throw new Error(ev.error || '不明なエラー');
+        }
+      }
+    }
+    if (turn !== askTurn) return;
+    if (!done) throw new Error('返事が途中で切れました');
+    busy = false;
+    reply = done.reply || reply;
+    history.push({ role: 'assistant', content: reply });
+    const display = String(done.display || '').replace(/^[ \t]*[*\-][ \t]+/gm, '・').replace(/\*\*(.+?)\*\*/g, '$1');
+    const shown = display ? reply + '\n\n' + display : reply;
+    lastReply = { reply, shown, files: done.files || [], cameras: done.cameras || [], speech: done.speech, audio: allAudio.length ? allAudio : null };
+    (done.trace || []).forEach(t => addMsg('memo', '（' + t + '）'));
+    if (done.timing && done.timing.length) addMsg('memo', '（かかった時間：' + done.timing.join('・') + '）');
+    addMsg('hayato', shown);
+    setCaption('hayato', shown);
+    renderFileButtons(done.files);
+    renderCameraButtons(done.cameras);
+    if (done.cameras && done.cameras.length) openCameras(done.cameras);
+    if (s.speak && !started) speakReply({ reply, speech: done.speech });   // 声が1つも届かなかったときは、取り直すかブラウザの声
+    else if (!s.speak) doneSpeaking();
+    if (s.memory) rememberInBackground(s, text, reply);
+  } catch (err) {
+    if (turn !== askTurn) return;
+    busy = false;
+    mine.remove();
+    history.pop();
+    input.value = text;
+    showError('通信に失敗しました：' + err.message);
+    stopSpeaking();
+    doneSpeaking();
+  } finally {
+    if (turn === askTurn) {
+      busy = false; btnSend.disabled = false; btnMic.disabled = false;
+      if (!matchMedia('(pointer: coarse)').matches) input.focus();
+    }
   }
 }
 
