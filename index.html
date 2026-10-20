@@ -769,7 +769,7 @@ async function askHayato(text) {
     history.push({ role: 'assistant', content: data.reply });
     // 画面には、読み上げる文章に加えて、在庫・天気などの内訳の箇条書き（サーバーがデータから作ったもの）を出す
     // 資料係の答えに混ざる Markdown の記号（行頭の * や -、**太字**）は、画面では「・」と普通の文字にする
-    const display = String(data.display || '').replace(/^[ \t]*[*\-][ \t]+/gm, '・').replace(/\*\*(.+?)\*\*/g, '$1');
+    const display = String(data.display || '').replace(/^[ \t]*#{1,6}[ \t]+/gm, '■ ').replace(/^[ \t]*[*\-][ \t]+/gm, '・').replace(/\*\*(.+?)\*\*/g, '$1');
     const shown = display ? data.reply + '\n\n' + display : data.reply;
     lastReply = { reply: data.reply, shown, files: data.files || [], cameras: data.cameras || [], speech: data.speech, audio: data.audio, ttsError: data.ttsError };
     (data.trace || []).forEach(t => addMsg('memo', '（' + t + '）'));   // 何を調べて答えたか
@@ -890,6 +890,10 @@ async function askHayatoStream(s, text, turn, mine) {
           if (!gotText) { gotText = true; addMsg('memo', '（文字が出るまで ' + ((Date.now() - t0) / 1000).toFixed(1) + '秒）'); }
           reply += ev.delta;
           setCaption('hayato', reply);
+        } else if (ev.type === 'tool') {
+          // 道具を使っている間は、何をしているかを状態の欄に出す（精査などは数十秒かかるため）
+          $('status').textContent = ev.label + '…';
+          addMsg('memo', '（' + ev.label + '…）');
         } else if (ev.type === 'replace') {
           reply = ev.reply;
           setCaption('hayato', reply);
@@ -912,7 +916,7 @@ async function askHayatoStream(s, text, turn, mine) {
     busy = false;
     reply = done.reply || reply;
     history.push({ role: 'assistant', content: reply });
-    const display = String(done.display || '').replace(/^[ \t]*[*\-][ \t]+/gm, '・').replace(/\*\*(.+?)\*\*/g, '$1');
+    const display = String(done.display || '').replace(/^[ \t]*#{1,6}[ \t]+/gm, '■ ').replace(/^[ \t]*[*\-][ \t]+/gm, '・').replace(/\*\*(.+?)\*\*/g, '$1');
     const shown = display ? reply + '\n\n' + display : reply;
     lastReply = { reply, shown, files: done.files || [], cameras: done.cameras || [], speech: done.speech, audio: allAudio.length ? allAudio : null };
     (done.trace || []).forEach(t => addMsg('memo', '（' + t + '）'));
