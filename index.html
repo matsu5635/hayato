@@ -515,7 +515,18 @@ function saveSettings(s) {
 
 // 中継サーバーへの問い合わせ（text/plain で送ると、GAS でもブラウザの事前確認（CORS）に引っかからない）
 //   名前と合言葉は、保存してあるものを自動で付ける。承認が外れた・合言葉が違うときは、登録・ログインの画面を出す
-async function callServer(url, payload) {
+// サーバー（GAS）への問い合わせは、1つずつ順番に送る。
+//   同時に2つ送ると（声の取得と記憶の更新など）、GAS は2秒で終わっているのに、答えが画面に届くまで数十秒待たされ、
+//   Google のエラーページになることがあった（2026-10-20 実測）。順番に送ると起きない
+let serverQueue = Promise.resolve();
+function callServer(url, payload) {
+  const run = () => callServerNow(url, payload);
+  const p = serverQueue.then(run, run);
+  serverQueue = p.catch(() => {});
+  return p;
+}
+
+async function callServerNow(url, payload) {
   const s = loadSettings();
   const body = Object.assign({ user: s.user, password: s.password }, payload);
   const res = await fetch(url, {
@@ -733,7 +744,6 @@ async function askHayato(text) {
     renderFileButtons(data.files);
     renderCameraButtons(data.cameras);
     if (data.cameras && data.cameras.length) openCameras(data.cameras);   // 頼まれた映像はそのまま出す
-    if (s.memory) rememberInBackground(s, text, data.reply);
     if (s.speak) {
       // 文字はもう出ているので、声を取ってきて読む（取れなければブラウザの声）
       setStatus('thinking');
@@ -746,9 +756,13 @@ async function askHayato(text) {
       } catch (err) {
         data.ttsError = lastReply.ttsError = err.message;
       }
+      if (s.memory) rememberInBackground(s, text, data.reply);   // 記憶の更新は、声を取ったあと（同時に送らない）
       if (turn !== askTurn) return;   // 声を待つ間に次の質問をした
       speakReply(data);
-    } else doneSpeaking();
+    } else {
+      if (s.memory) rememberInBackground(s, text, data.reply);
+      doneSpeaking();
+    }
   } catch (err) {
     busy = false;
     mine.remove();
