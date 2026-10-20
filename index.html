@@ -33,6 +33,10 @@
               mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
     }
   }
+  /* スマホ（幅 600px 未満）は少し小さめ */
+  @media (orientation: portrait) and (max-width: 599px) {
+    #stage video { width: min(290vw, 85vh); }
+  }
 
   /* ---- 上：タイトルとボタン ---- */
   header { position: fixed; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between;
