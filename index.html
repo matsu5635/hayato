@@ -430,6 +430,12 @@ const stage = (() => {
       setTimeout(() => { if (prev !== current) prev.pause(); }, FADE_MS);
     }
   }
+  // 表示中の動画が勝手に止まったら（Chrome は見えていないタブの音なし動画を止めることがある。
+  // Meet でこのタブを共有しているときに止まると、皆にはハヤトが静止画に見える）、すぐ再生し直す
+  Object.values(V).forEach(v => v.addEventListener('pause', () => {
+    if (v === current && !v.ended) setTimeout(() => { if (v === current && v.paused && !v.ended) v.play().catch(() => {}); }, 150);
+  }));
+  document.addEventListener('visibilitychange', () => { if (current && current.paused && !current.ended) current.play().catch(() => {}); });
   const inSearch = () => current === V.start || current === V.search;
 
   function startSearch() {
