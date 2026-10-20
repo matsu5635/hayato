@@ -438,8 +438,11 @@ const stage = (() => {
 // ============================================================
 const MAX_HISTORY = 20;           // サーバーに送る会話の件数
 const STORE_KEY = 'hayato.company';   // 個人版（hayato.settings）と混ざらないように別の名前
-// ハヤトの接続先（会社版の GAS のウェブアプリ URL）。管理者がデプロイ後にここへ貼っておくと、使う人は入力しなくてよい
-const DEFAULT_SERVER_URL = 'https://script.google.com/macros/s/AKfycbxbiNcHc3P6trE5yyhz51XO99u9sOeQkG98F9aAOGkK-RvlAZMD-0QCmlstgpKk7qxX/exec';
+// ハヤトの接続先。2026-10-20 に GAS から Cloud Run 版へ切り替えた（GAS 版は予備として残している）
+const DEFAULT_SERVER_URL = 'https://hayato-190985261259.asia-northeast1.run.app';
+// 前の接続先（GAS 版）。この URL が端末に保存されている人は、開いたときに自動で DEFAULT_SERVER_URL に切り替える
+//   Cloud Run 版に問題が出て GAS 版に戻すときは、DEFAULT_SERVER_URL とこの一覧を入れ替える
+const OLD_SERVER_URLS = ['https://script.google.com/macros/s/AKfycbxbiNcHc3P6trE5yyhz51XO99u9sOeQkG98F9aAOGkK-RvlAZMD-0QCmlstgpKk7qxX/exec'];
 const log = $('log'), input = $('input'), btnSend = $('btnSend');
 const talkUser = $('talkUser'), talkHayato = $('talkHayato');
 let history = [];                 // [{role:'user'|'assistant', content:'...'}]
@@ -502,7 +505,11 @@ function showError(text) {
 function loadSettings() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch {}
-  if (!s.url) s.url = DEFAULT_SERVER_URL;
+  if (!s.url || OLD_SERVER_URLS.includes(s.url)) {
+    const moved = !!s.url;
+    s.url = DEFAULT_SERVER_URL;
+    if (moved) { try { localStorage.setItem(STORE_KEY, JSON.stringify(s)); } catch {} }   // 次からは新しい接続先を使う
+  }
   if (s.speak === undefined) s.speak = true;
   if (s.autoSend === undefined) s.autoSend = true;
   if (s.memory === undefined) s.memory = true;
