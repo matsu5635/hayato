@@ -1169,9 +1169,18 @@ async function uploadFiles(items, folderName) {
     if (failed.length) reply += '送れなかったもの ' + failed.length + '件：' + failed.slice(0, 5).join('、') + (failed.length > 5 ? ' ほか' : '') + '。';
     if (skipped.length) reply += '送らなかったもの：' + skipped.slice(0, 5).join('、') + (skipped.length > 5 ? ' ほか' : '') + '。';
     if (done.length) reply += notes.size ? [...notes].join('') : '内容について聞いてください。';
-    lastReply = { reply };
     setCaption('hayato', reply);
-    if (s.speak) speakReply({ reply }); else doneSpeaking();
+    // 画面で作った返事も、ハヤトの声（Google の読み上げ）で読む。取れなければブラウザの声
+    lastReply = { reply };
+    if (s.speak) {
+      try {
+        const { audio } = await callServer(s.url, { action: 'tts', text: reply, voice: s.voice });
+        lastReply.audio = audio;
+      } catch (err) {
+        lastReply.ttsError = err.message;
+      }
+      speakReply(lastReply);
+    } else doneSpeaking();
   } finally {
     window.removeEventListener('beforeunload', warn);
     busy = false; btnSend.disabled = false; btnMic.disabled = false; $('btnUpload').disabled = false;
