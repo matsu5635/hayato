@@ -419,7 +419,7 @@ function setCaption(kind, text) {
   who.className = 'who';
   who.textContent = kind === 'user' ? 'YOU' : kind === 'error' ? 'ERROR' : 'AI HAYATO';
   // ハヤトの返事には「もう一度」ボタン（聞き逃したとき、AI に聞き直さずに読み直す）
-  if (kind === 'hayato' && lastReply && text === lastReply.reply) {
+  if (kind === 'hayato' && lastReply && (text === lastReply.reply || text === lastReply.shown)) {
     const again = document.createElement('button');
     again.type = 'button'; again.className = 'again'; again.textContent = 'もう一度';
     again.addEventListener('click', replayLast);
@@ -585,7 +585,7 @@ async function speakReply(data) {
 // 直前の返事を、AI に聞き直さずにそのまま読み直す
 function replayLast() {
   if (!lastReply || busy) return;
-  setCaption('hayato', lastReply.reply);
+  setCaption('hayato', lastReply.shown || lastReply.reply);
   speakReply(lastReply);
 }
 
@@ -648,10 +648,12 @@ async function askHayato(text) {
     });
     busy = false;
     history.push({ role: 'assistant', content: data.reply });
-    lastReply = { reply: data.reply, speech: data.speech, audio: data.audio, ttsError: data.ttsError };
+    // 画面には、読み上げる文章に加えて、在庫・天気などの内訳の箇条書き（サーバーがデータから作ったもの）を出す
+    const shown = data.display ? data.reply + '\n\n' + data.display : data.reply;
+    lastReply = { reply: data.reply, shown, speech: data.speech, audio: data.audio, ttsError: data.ttsError };
     (data.trace || []).forEach(t => addMsg('memo', '（' + t + '）'));   // 何を調べて答えたか
-    addMsg('hayato', data.reply);
-    setCaption('hayato', data.reply);
+    addMsg('hayato', shown);
+    setCaption('hayato', shown);
     if (s.speak) speakReply(data);
     else doneSpeaking();
     if (s.memory) rememberInBackground(s, text, data.reply);
