@@ -566,6 +566,7 @@ player.addEventListener('ended', () => {
   playedParts++;
   playedSecs += isFinite(player.duration) ? player.duration : 0;
   if (audioQueue.length) { playNextPart().catch(() => doneSpeaking()); return; }
+  if (moreAudioComing) { waitingForMore = true; return; }   // 続きの声を待つ（話す動画のまま）
   addMsg('memo', '【再生の記録】最後まで再生（' + playedParts + 'かたまり、合計' + playedSecs.toFixed(1) + '秒）');
   playedParts = 0; playedSecs = 0;
   doneSpeaking();
@@ -586,6 +587,28 @@ function logPlayback(what) {
 player.addEventListener('error', () => logPlayback('再生エラー：' + (player.error && player.error.message || player.error && player.error.code)));
 player.addEventListener('stalled', () => logPlayback('読み込みが止まった'));
 
+// 返事を「最初の一文」と「残り」に分ける（短い返事は分けない）
+function splitFirstSentence(text) {
+  text = String(text || '');
+  const m = text.match(/^[\s\S]{8,80}?[。！？!?\n]/);
+  if (!m || text.length - m[0].length < 15) return [text, ''];
+  return [m[0], text.slice(m[0].length).trim()];
+}
+
+// 続きの声がまだ届いていない間は、読み終わっても「話し終わり」にしない
+let moreAudioComing = false;
+let waitingForMore = false;
+function appendAudio(parts) {
+  moreAudioComing = false;
+  parts = (Array.isArray(parts) ? parts : [parts]).filter(Boolean);
+  audioQueue.push(...parts);
+  if (waitingForMore) {
+    waitingForMore = false;
+    if (audioQueue.length) playNextPart().catch(() => doneSpeaking());
+    else doneSpeaking();
+  }
+}
+
 function playNextPart() {
   player.src = 'data:audio/mp3;base64,' + audioQueue.shift();
   return player.play();
@@ -599,6 +622,8 @@ function doneSpeaking() {
 
 function stopSpeaking() {
   audioQueue = [];
+  moreAudioComing = false;
+  waitingForMore = false;
   stoppedAt = Date.now();
   player.pause();
   if ('speechSynthesis' in window) speechSynthesis.cancel();
@@ -748,17 +773,33 @@ async function askHayato(text) {
       // 文字はもう出ているので、声を取ってきて読む（取れなければブラウザの声）
       setStatus('thinking');
       $('status').textContent = '声を準備中。';
+      // 最初の一文だけ先に声にして読み始め、その間に残りを作る（長い返事でも、読み始めるまでを短くする）
+      const [head, rest] = splitFirstSentence(data.reply);
       const t0 = Date.now();
       try {
-        const { audio } = await callServer(s.url, { action: 'tts', text: data.reply, voice: s.voice });
-        data.audio = lastReply.audio = audio;
-        addMsg('memo', '（声の準備 ' + ((Date.now() - t0) / 1000).toFixed(1) + '秒）');
+        const r = await callServer(s.url, { action: 'tts', text: head, voice: s.voice });
+        data.audio = lastReply.audio = r.audio;
+        addMsg('memo', '（声の準備 ' + ((Date.now() - t0) / 1000).toFixed(1) + '秒' + (r.timing ? '：' + r.timing.join('・') : '') + (rest ? '、最初の一文' : '') + '）');
       } catch (err) {
         data.ttsError = lastReply.ttsError = err.message;
       }
-      if (s.memory) rememberInBackground(s, text, data.reply);   // 記憶の更新は、声を取ったあと（同時に送らない）
       if (turn !== askTurn) return;   // 声を待つ間に次の質問をした
-      speakReply(data);
+      if (data.audio && rest) {
+        speakReply(data);
+        moreAudioComing = true;   // speakReply の中の stopSpeaking で消されないよう、呼んだあとに立てる
+        try {
+          const r2 = await callServer(s.url, { action: 'tts', text: rest, voice: s.voice });
+          lastReply.audio = [].concat(data.audio, r2.audio);
+          if (turn === askTurn) appendAudio(r2.audio);
+        } catch (err) {
+          addMsg('memo', '（続きの声を作れませんでした：' + err.message + '）');
+          if (turn === askTurn) appendAudio([]);
+        }
+      } else {
+        if (rest) data.audio = null;   // 最初の一文が失敗したら、全文をブラウザの声で読む
+        speakReply(data);
+      }
+      if (s.memory) rememberInBackground(s, text, data.reply);   // 記憶の更新は、声を取ったあと（同時に送らない）
     } else {
       if (s.memory) rememberInBackground(s, text, data.reply);
       doneSpeaking();
