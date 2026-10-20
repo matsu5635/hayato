@@ -33,6 +33,10 @@
               mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
     }
   }
+  /* 縦長でも幅が広い画面（PC の縦長ウィンドウ・タブレット）は、290vw だと大きすぎるので高さを基準にする */
+  @media (orientation: portrait) and (min-width: 600px) {
+    #stage video { width: 110vh; }
+  }
 
   /* ---- 上：タイトルとボタン ---- */
   header { position: fixed; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between;
