@@ -523,7 +523,17 @@ async function callServer(url, payload) {
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(body),
   });
-  const data = await res.json();
+  const raw = await res.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    // GAS ではなく Google 側のエラーページが返ってきた。ページの題名と本文の先頭を見せて、原因を分かるようにする
+    const doc = new DOMParser().parseFromString(raw, 'text/html');
+    const title = (doc.title || '').trim();
+    const body = (doc.body ? doc.body.innerText : raw).replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error('Google のエラーページが返りました（HTTP ' + res.status + '、' + (payload.action || 'chat') + '）：' + (title ? title + '／' : '') + body);
+  }
   if (!data.ok) {
     if (data.needLogin || (data.status && data.status !== '承認済み')) showGate(data.status === '承認待ち' ? 'wait' : 'form', data.error);
     throw new Error(data.error || '不明なエラー');
