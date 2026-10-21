@@ -1026,7 +1026,9 @@ $('btnChorei').addEventListener('click', () => {
   $('chorei').hidden = !$('chorei').hidden;
 });
 $('choreiDedicated').addEventListener('change', () => { const s = loadSettings(); s.choreiDedicated = $('choreiDedicated').checked; saveSettings(s); });
-$('choreiClose').addEventListener('click', () => { if (chorei.rec && !confirm('聞き取りをやめますか？（まとめは作りません）')) return; choreiStop(); $('chorei').hidden = true; });
+$('choreiClose').addEventListener('click', () => {
+  if (chorei.rec && !confirm('聞き取りをやめますか？（まとめは作りません）')) return;
+  if (!chorei.rec && chorei.retry && !confirm('まだ送れていない朝礼の録音があります。捨てて閉じますか？')) return; choreiStop(); $('chorei').hidden = true; });
 
 function choreiState(text, rec) {
   $('choreiState').textContent = text;
@@ -1038,9 +1040,10 @@ function choreiStop() {
   if (chorei.rec && chorei.rec.state !== 'inactive') { chorei.rec.onstop = null; chorei.rec.stop(); }
   chorei.streams.forEach(st => st.getTracks().forEach(t => t.stop()));
   if (chorei.ctx) chorei.ctx.close().catch(() => {});
-  Object.assign(chorei, { rec: null, chunks: [], streams: [], ctx: null });
+  Object.assign(chorei, { rec: null, chunks: [], streams: [], ctx: null, retry: null });
   $('choreiStart').disabled = false;
   $('choreiReview').disabled = true;
+  $('choreiReview').textContent = '総評お願い';
   $('btnChorei').classList.remove('on');
   choreiState('聞き取っていません');
 }
@@ -1048,6 +1051,7 @@ function choreiStop() {
 $('choreiStart').addEventListener('click', async () => {
   const s = loadSettings();
   if (!isCloudRun(s.url)) { toast('朝礼モードは Cloud Run 版の接続先でだけ使えます。'); return; }
+  if (chorei.retry && !confirm('まだ送れていない朝礼の録音があります。捨てて、新しく聞き取りを始めますか？')) return;
   try {
     // Meet のタブ（音声つき）を選んでもらう。映像は使わない
     const dedicated = $('choreiDedicated').checked;
@@ -1070,6 +1074,8 @@ $('choreiStart').addEventListener('click', async () => {
     const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'].find(t => MediaRecorder.isTypeSupported(t)) || '';
     const rec = new MediaRecorder(dest.stream, { mimeType: type, audioBitsPerSecond: 32000 });
     chorei.chunks = [];
+    chorei.retry = null;
+    $('choreiReview').textContent = '総評お願い';
     rec.ondataavailable = e => { if (e.data && e.data.size) chorei.chunks.push(e.data); };
     rec.start(5000);
     chorei.rec = rec;
@@ -1094,18 +1100,25 @@ $('choreiStart').addEventListener('click', async () => {
 
 $('choreiReview').addEventListener('click', async () => {
   const rec = chorei.rec;
-  if (!rec || busy) return;
+  // 前に送れなかった録音があれば、それを送り直す（通信やサーバーの不調で、朝礼の録音を失わないように）
+  if ((!rec && !chorei.retry) || busy) return;
   clearInterval(chorei.timer);
   $('choreiReview').disabled = true;
   choreiState('朝礼をまとめています…（30秒ほど）', false);
-  const blob = await new Promise(ok => {
-    rec.onstop = () => ok(new Blob(chorei.chunks, { type: rec.mimeType || 'audio/webm' }));
-    rec.stop();
-  });
+  let blob;
+  if (rec) {
+    blob = await new Promise(ok => {
+      rec.onstop = () => ok(new Blob(chorei.chunks, { type: rec.mimeType || 'audio/webm' }));
+      rec.stop();
+    });
+    chorei.streams.forEach(st => st.getTracks().forEach(t => t.stop()));
+    if (chorei.ctx) chorei.ctx.close().catch(() => {});
+    chorei.rec = null;
+  } else {
+    blob = chorei.retry;
+  }
   const mime = blob.type;
-  chorei.streams.forEach(st => st.getTracks().forEach(t => t.stop()));
-  if (chorei.ctx) chorei.ctx.close().catch(() => {});
-  chorei.rec = null;
+  let sent = false;
   const s = loadSettings();
   busy = true; btnSend.disabled = true; btnMic.disabled = true;
   stage.startSearch();
@@ -1125,18 +1138,24 @@ $('choreiReview').addEventListener('click', async () => {
     setCaption('hayato', shown);
     history.push({ role: 'user', content: '朝礼の総評をお願いします' }, { role: 'assistant', content: total });
     lastReply = { reply: total, shown };
+    sent = true;
+    chorei.retry = null;
+    $('choreiReview').textContent = '総評お願い';
     choreiState('まとめました。朝礼メモと Chat に残しました。', false);
     if (s.speak) await speakLong(s, total); else doneSpeaking();
   } catch (err) {
     busy = false;
-    showError('朝礼をまとめられませんでした：' + err.message);
-    choreiState('まとめられませんでした：' + err.message, false);
+    if (!sent) chorei.retry = blob;   // 録音は捨てずに残す（「もう一度送る」で送り直せる）
+    const why = /Failed to fetch|NetworkError|Load failed/i.test(err.message) ? 'サーバーから返事がありませんでした（通信が切れたか、サーバーが混んでいました）' : err.message;
+    showError('朝礼をまとめられませんでした：' + why + (chorei.retry ? '。録音は残してあるので「もう一度送る」を押してください。' : ''));
+    choreiState('まとめられませんでした：' + why + (chorei.retry ? '（録音は残っています）' : ''), false);
     doneSpeaking();
   } finally {
     busy = false; btnSend.disabled = false; btnMic.disabled = false;
     chorei.streams = []; chorei.chunks = []; chorei.ctx = null;
     $('choreiStart').disabled = false;
     $('btnChorei').classList.remove('on');
+    if (chorei.retry) { $('choreiReview').disabled = false; $('choreiReview').textContent = 'もう一度送る'; }
   }
 });
 
