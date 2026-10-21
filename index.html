@@ -364,6 +364,12 @@
     <button class="icon-btn" id="btnTry" type="button">試聴</button>
   </div>
   <p class="note" id="voiceNote"></p>
+  <label for="setSink">声の出し先</label>
+  <div class="inline">
+    <select id="setSink"><option value="">（PC の既定のスピーカー）</option></select>
+    <button class="icon-btn" id="btnSinks" type="button">一覧を取得</button>
+  </div>
+  <p class="note" id="sinkNote">Meet にハヤトとして参加させるときは「CABLE Input」を選び、ハヤトの Meet のマイクを「CABLE Output」にします（画面共有なしで声だけ届きます）。</p>
 
   <h3>部署</h3>
   <select class="dept" id="setDept"><option value="">（読み込み中…）</option></select>
@@ -684,6 +690,36 @@ function appendAudio(parts) {
 function playNextPart() {
   player.src = 'data:audio/mp3;base64,' + audioQueue.shift();
   return player.play();
+}
+
+// 声の出し先（スピーカーを選ぶ）。Meet にハヤトとして参加させるとき、ハヤトの声だけを仮想ケーブル（VB-CABLE）に流す
+//   出し先の ID は変わることがあるので、名前（label）で覚えて、使うときに ID を探し直す
+async function audioOutputs(askPermission) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
+  let list = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput');
+  if (askPermission && list.length && !list.some(d => d.label)) {
+    // 名前はマイクを許可したあとでないと見えない（マイクはすぐ止める）
+    try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach(t => t.stop()); } catch (e) {}
+    list = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput');
+  }
+  return list.filter(d => d.deviceId !== 'default' && d.deviceId !== 'communications');
+}
+async function applySink(label) {
+  if (typeof player.setSinkId !== 'function') return label ? 'このブラウザは声の出し先を選べません（Chrome・Edge で使ってください）。' : '';
+  if (!label) { await player.setSinkId('').catch(() => {}); return ''; }
+  const d = (await audioOutputs(false)).find(x => x.label === label);
+  if (!d) { await player.setSinkId('').catch(() => {}); return '「' + label + '」が見つからないので、既定のスピーカーで話します。'; }
+  await player.setSinkId(d.deviceId);
+  return '';
+}
+// 開いたとき・機器をつないだり外したりしたときに、保存してある出し先にする
+applySink(loadSettings().sink).then(msg => { if (msg) toast(msg); }).catch(() => {});
+if (navigator.mediaDevices) navigator.mediaDevices.addEventListener('devicechange', () => applySink(loadSettings().sink).catch(() => {}));
+function addSinkOption(label) {
+  if (!label || [...$('setSink').options].some(o => o.value === label)) return;
+  const o = document.createElement('option');
+  o.value = o.textContent = label;
+  $('setSink').appendChild(o);
 }
 
 function doneSpeaking() {
@@ -1386,10 +1422,27 @@ function openSettings() {
   renderRangeOutputs();
   $('setAutoSend').checked = s.autoSend;
   $('setMemory').checked = s.memory;
+  addSinkOption(s.sink);
+  $('setSink').value = s.sink || '';
+  audioOutputs(false).then(list => list.forEach(d => addSinkOption(d.label))).catch(() => {});
   $('memoryList').hidden = true;
   voiceNote.textContent = '';
   dlg.showModal();
 }
+
+$('btnSinks').addEventListener('click', async () => {
+  $('sinkNote').textContent = '取得中…';
+  try {
+    const list = await audioOutputs(true);
+    list.forEach(d => addSinkOption(d.label));
+    const cable = list.find(d => /CABLE Input/i.test(d.label));
+    $('sinkNote').textContent = list.length + '個の出し先があります。' + (cable ? 'Meet 用は「' + cable.label + '」です。' : '（CABLE Input が無ければ、VB-CABLE を入れて PC を再起動してください）');
+  } catch (err) {
+    $('sinkNote').textContent = '取得に失敗しました：' + err.message;
+  }
+});
+// 選んだら、試聴もその出し先で聞けるように、すぐ切り替える（保存は「保存」で）
+$('setSink').addEventListener('change', () => applySink($('setSink').value).then(msg => { if (msg) $('sinkNote').textContent = msg; }));
 
 $('btnVoices').addEventListener('click', async () => {
   const url = $('setUrl').value.trim() || loadSettings().url, passcode = loadSettings().password;
@@ -1452,14 +1505,16 @@ $('btnMemories').addEventListener('click', async () => {
 $('setRate').addEventListener('input', renderRangeOutputs);
 $('setPitch').addEventListener('input', renderRangeOutputs);
 $('btnSettings').addEventListener('click', openSettings);
-$('setCancel').addEventListener('click', () => { stopSpeaking(); dlg.close(); });
+$('setCancel').addEventListener('click', () => { stopSpeaking(); applySink(loadSettings().sink); dlg.close(); });   // 選びかけた出し先は元に戻す
 $('setSave').addEventListener('click', () => {
   const s = loadSettings();
   s.url = $('setUrl').value.trim();
   s.voice = dialogVoice();
   s.autoSend = $('setAutoSend').checked;
   s.memory = $('setMemory').checked;
+  s.sink = $('setSink').value;
   saveSettings(s);
+  applySink(s.sink).then(msg => { if (msg) toast(msg); });
   stopSpeaking();
   dlg.close();
   input.focus();
