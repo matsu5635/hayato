@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIハヤト 使い方ガイド</title>
+<style>
+  :root {
+    --navy: #152445; --ink: #1f2a3c; --muted: #5d6b80; --line: #d9e1ec; --bg: #f5f7fb; --card: #ffffff;
+    --accent: #2b8fbf; --accent-soft: #e4f2f9; --warn: #b5481f; --warn-soft: #fbeee8; --ok-soft: #e9f6ee;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif; line-height: 1.8; font-size: 16px; }
+  header.hero { background: var(--navy); color: #fff; padding: 36px 16px 30px; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 16px; }
+  .hero .wrap { display: flex; align-items: center; gap: 20px; }
+  .hero img { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; object-position: 50% 18%; background: #22355f; flex: none; border: 3px solid rgba(255,255,255,.25); }
+  .hero h1 { margin: 0; font-size: 26px; letter-spacing: .04em; }
+  .hero p { margin: 6px 0 0; color: #c9d7ea; font-size: 15px; }
+  .url { display: inline-block; margin-top: 10px; background: rgba(255,255,255,.12); padding: 4px 12px; border-radius: 6px; font-family: Consolas, monospace; color: #fff; text-decoration: none; }
+
+  nav.toc { background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  nav.toc .wrap { display: flex; gap: 6px; overflow-x: auto; padding-top: 8px; padding-bottom: 8px; scrollbar-width: none; }
+  nav.toc a { flex: none; font-size: 13px; color: var(--ink); text-decoration: none; padding: 4px 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); }
+  nav.toc a:hover { border-color: var(--accent); color: var(--accent); }
+
+  main { padding: 24px 0 60px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px 22px 18px; margin: 0 0 20px; }
+  section h2 { margin: 0 0 4px; font-size: 21px; display: flex; align-items: center; gap: 10px; }
+  .num { flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--navy); color: #fff; font-size: 15px; display: grid; place-items: center; }
+  .lead { color: var(--muted); margin: 0 0 14px; font-size: 15px; }
+  .row { display: grid; grid-template-columns: 220px 1fr; gap: 22px; align-items: start; }
+  .row + .row { margin-top: 18px; padding-top: 18px; border-top: 1px dashed var(--line); }
+  .shot { width: 100%; border-radius: 16px; border: 1px solid #1c2a48; box-shadow: 0 6px 18px rgba(21,36,69,.18); display: block; }
+  .shot.wide { border-radius: 10px; }
+  figure { margin: 0; }
+  figcaption { font-size: 12px; color: var(--muted); text-align: center; margin-top: 6px; }
+  ol.steps { margin: 0; padding-left: 1.4em; }
+  ol.steps li { margin-bottom: 6px; }
+  h3 { font-size: 16px; margin: 0 0 6px; }
+  .say { display: inline-block; background: var(--accent-soft); color: #165a7a; border-radius: 8px; padding: 1px 10px; margin: 2px 0; font-weight: 600; }
+  .tip, .warn, .ok { border-radius: 10px; padding: 10px 14px; margin: 12px 0 0; font-size: 14.5px; }
+  .tip { background: var(--accent-soft); }
+  .warn { background: var(--warn-soft); color: #5b2a14; }
+  .ok { background: var(--ok-soft); }
+  .tip > b:first-child, .warn > b:first-child, .ok > b:first-child { display: block; margin-bottom: 2px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; margin-top: 8px; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--bg); font-weight: 600; white-space: nowrap; }
+  .cando { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 4px; }
+  .cando div { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14.5px; }
+  .cando b { display: block; color: var(--navy); }
+  footer { text-align: center; color: var(--muted); font-size: 13px; padding: 10px 0 40px; }
+
+  @media (max-width: 640px) {
+    .hero .wrap { flex-direction: column; text-align: center; }
+    .row { grid-template-columns: 1fr; }
+    .row figure { max-width: 260px; margin: 0 auto; }
+    section { padding: 18px 16px 14px; }
+  }
+  @media print {
+    body { background: #fff; font-size: 12.5px; }
+    nav.toc { display: none; }
+    header.hero { padding: 18px 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    section { break-inside: avoid; border-color: #ccc; box-shadow: none; }
+    .row { grid-template-columns: 170px 1fr; }
+    .shot { box-shadow: none; }
+    .num, .tip, .warn, .ok, .say, th, .cando div { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    a.url { color: #fff; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <img src="img/home.jpg" alt="AIハヤト">
+    <div>
+      <h1>AIハヤト 使い方ガイド</h1>
+      <p>話しかけるだけで、在庫・資料・今日の予定などを調べてくれる、社員一人ひとりのアシスタントです。</p>
+      <a class="url" href="https://matsu5635.github.io/hayato/">https://matsu5635.github.io/hayato/</a>
+    </div>
+  </div>
+</header>
+
+<nav class="toc"><div class="wrap">
+  <a href="#can">できること</a><a href="#s1">登録</a><a href="#s2">話しかけ方</a><a href="#s3">在庫</a><a href="#s4">資料を見る</a>
+  <a href="#s5">資料を送る・精査</a><a href="#s6">メモして</a><a href="#s7">会社の決まり</a><a href="#s8">今日の予定</a>
+  <a href="#s9">カメラ</a><a href="#s10">履歴・設定</a><a href="#s11">朝礼</a><a href="#faq">困ったとき</a>
+</div></nav>
+
+<main class="wrap">
+
+<section id="can">
+  <h2>ハヤトにできること</h2>
+  <p class="lead">スマホでも PC でも使えます。ふだんの言葉で話しかけてください。</p>
+  <div class="cando">
+    <div><b>在庫を調べる</b>「301000 の在庫は？」</div>
+    <div><b>資料を見せる・読む</b>「446263 の指示書見せて」</div>
+    <div><b>資料の間違い探し</b>送った書類を「精査して」</div>
+    <div><b>今日の予定</b>朝礼の内容を「今日の予定は？」</div>
+    <div><b>号機のカメラ</b>「NW5 のカメラ見せて」</div>
+    <div><b>天気・調べもの</b>「明日の大阪の天気は？」</div>
+    <div><b>答え方を覚える</b>「〜して。手帳にメモして」</div>
+    <div><b>何でも相談</b>文章づくり・考えの整理など</div>
+  </div>
+</section>
+
+<section id="s1">
+  <h2><span class="num">1</span>はじめての登録</h2>
+  <p class="lead">最初の1回だけ。登録したあと、管理者が承認すると使えるようになります。</p>
+  <div class="row">
+    <figure><img class="shot" src="img/register.jpg" alt="登録の画面"><figcaption>登録の画面</figcaption></figure>
+    <div>
+      <ol class="steps">
+        <li>上の URL をスマホ（または PC）で開きます。ホーム画面に追加しておくと便利です。</li>
+        <li>「<b>はじめての方</b>」で、次の3つを入れます。
+          <table>
+            <tr><th>お名前</th><td><b>名字と名前</b>（例：山田 太郎）。同じ名字の人がいるので、必ず両方</td></tr>
+            <tr><th>合言葉</th><td>自分で決める。<b>4文字以上</b>。管理者にも分からない形で保存されます</td></tr>
+            <tr><th>招待コード</th><td>会社から聞いたもの</td></tr>
+          </table></li>
+        <li>「<b>登録して始める</b>」を押します。</li>
+      </ol>
+    </div>
+  </div>
+  <div class="row">
+    <figure><img class="shot" src="img/wait.jpg" alt="承認待ちの画面"><figcaption>承認待ち</figcaption></figure>
+    <div>
+      <ol class="steps" start="4">
+        <li>「承認をお待ちください」と出たら、管理者の承認を待ちます。</li>
+        <li>承認されると、画面が自動で切り替わります（30秒ごとに確かめています）。すぐ確かめたいときは「<b>承認されたか確認する</b>」。</li>
+      </ol>
+      <div class="ok"><b>次からは</b>名前と合言葉はこの端末が覚えているので、開くだけで使えます。</div>
+      <div class="tip"><b>別のスマホや PC で使うとき</b>「<b>登録済みの方</b>」を選び、同じ名前と合言葉を入れます。</div>
+    </div>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="num">2</span>話しかけ方</h2>
+  <div class="row">
+    <figure><img class="shot" src="img/inventory.jpg" alt="話しかけた画面"><figcaption>上が自分の質問、下がハヤトの返事</figcaption></figure>
+    <div>
+      <ol class="steps">
+        <li><b>マイク🎤</b>を押して話す（話し終わると自動で送られます）か、下の欄に<b>文字で入れて「送信」</b>。</li>
+        <li>ハヤトが<b>声と文字</b>で答えます。文字はできたそばから出て、声はそのあと続きます。</li>
+      </ol>
+      <table>
+        <tr><th>読み上げ：オン／オフ</th><td>声で答えるかどうか（静かな場所ではオフ）</td></tr>
+        <tr><th>もう一度</th><td>返事を聞き逃したとき、もう一度読み上げます。「もう一回」と話しかけても同じです</td></tr>
+        <tr><th>リセット</th><td>話の流れをいったん忘れて、新しい話を始めます</td></tr>
+      </table>
+      <div class="tip"><b>コツ</b>製品コードは数字で（「301000」）。マイクのときは、はっきり区切って話すと聞き間違いが減ります。</div>
+    </div>
+  </div>
+</section>
+
+<section id="s3">
+  <h2><span class="num">3</span>在庫を調べる</h2>
+  <div class="row">
+    <figure><img class="shot" src="img/history.jpg" alt="在庫の答え"><figcaption>倉庫ごと・ロットごとの内訳も画面に出ます</figcaption></figure>
+    <div>
+      <p>ZAICO の最新の在庫を調べます（見るだけで、在庫を変えることはしません）。</p>
+      <p><span class="say">301000 の在庫は？</span>　→ 合計と倉庫ごとの数<br>
+         <span class="say">菱木倉庫の 301000 は？</span>　→ その倉庫だけ<br>
+         <span class="say">ロットの内訳も教えて</span>　→ ロットごとの数<br>
+         <span class="say">SB M の在庫は？</span>　→ 製品コードが分からないときは物品名で</p>
+      <div class="tip"><b>いつも同じ倉庫しか見ないなら</b>「<b>在庫を聞いたら、堺 原料だけ答えて。手帳にメモして</b>」と言っておくと、次からその倉庫だけ答えます（→ <a href="#s6">6. メモして</a>）。全部見たいときは「全倉庫で」。</div>
+    </div>
+  </div>
+</section>
+
+<section id="s4">
+  <h2><span class="num">4</span>資料を見る・資料について聞く</h2>
+  <div class="row">
+    <figure><img class="shot" src="img/docs.jpg" alt="資料を見せての画面"><figcaption>「開く」ボタンが出ます</figcaption></figure>
+    <div>
+      <h3>資料そのものを見る</h3>
+      <p><span class="say">446263 の指示書見せて</span>　<span class="say">11月の 446263 の指示書見せて</span></p>
+      <ol class="steps">
+        <li>ハヤトが資料を探して、画面に「<b>📄 〇〇 開く</b>」ボタンを出します。</li>
+        <li><b>会社資料は機密</b>のため、管理者の許可が要ります。ハヤトが自動で<b>閲覧の申請</b>をします（ボタンに「許可待ち」）。</li>
+        <li>管理者が許可すると、<b>24時間</b>開けます。ボタンを押すと資料が表示されます。</li>
+      </ol>
+      <div class="warn"><b>保存・印刷はできません</b>資料は画面で見るだけです。誰がいつ見たかの記録が残ります。</div>
+    </div>
+  </div>
+  <div class="row">
+    <figure><img class="shot" src="img/viewer.jpg" alt="資料の表示"><figcaption>「＋」「－」で拡大・縮小</figcaption></figure>
+    <div>
+      <h3>資料の中身を聞く</h3>
+      <p><span class="say">446263 の使用原料を教えて</span>　<span class="say">フォークリフトの点検の手順は？</span></p>
+      <p>ハヤトが資料を読んで答えます。読んだ資料の名前と、まとめた内容が画面に出ます。資料を読むときは<b>15秒前後</b>かかります。</p>
+      <div class="tip"><b>月の指定</b>月を言わなければ、いちばん新しい月の製造指示書を使います。</div>
+    </div>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="num">5</span>資料を送る・間違いを探してもらう（精査）</h2>
+  <div class="row">
+    <figure><img class="shot" src="img/upload.jpg" alt="アップロード後の画面"><figcaption>送ったあとに「精査する」ボタン</figcaption></figure>
+    <div>
+      <ol class="steps">
+        <li>入力欄の左の<b>📎</b>を押し、ファイルを選びます（PDF・Word・Excel・写真など。複数選べます）。<br>PC では<b>フォルダーごと</b>送ることもできます。</li>
+        <li>送った資料は<b>自分専用の資料フォルダ</b>に入り、あとから「〇〇について教えて」と聞けます。ほかの人には見えません。</li>
+        <li>「<b>🔍 〇〇 を精査する</b>」を押すか、<span class="say">これを精査して</span>と言うと、ハヤトが間違いを探します。</li>
+      </ol>
+    </div>
+  </div>
+  <div class="row">
+    <figure><img class="shot" src="img/review.jpg" alt="精査の結果"><figcaption>総評と、指摘の一覧が出ます</figcaption></figure>
+    <div>
+      <p>誤字脱字・言い回し・敬語・前後の矛盾・数字や日付の食い違い・抜けている項目（日付・宛先など）を指摘します。</p>
+      <p><span class="say">敬語を中心に見て</span>　<span class="say">数字の計算を確かめて</span>　のように、見てほしい点も伝えられます。</p>
+      <div class="tip"><b>時間がかかります</b>精査は資料の長さにより<b>30秒〜1分</b>ほど。待っている間は「資料を精査しています…」と出ます。</div>
+    </div>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="num">6</span>「メモして」── 自分専用の答え方を覚えさせる（ハヤト手帳）</h2>
+  <div class="row">
+    <figure><img class="shot" src="img/note.jpg" alt="手帳にメモ"><figcaption>「手帳にメモしました」と出れば完了</figcaption></figure>
+    <div>
+      <p>答え方の好みを伝えて「<b>手帳にメモして</b>」と付けると、ハヤトが<b>あなた専用の手帳</b>に書き込み、次からずっとそのとおりに答えます。</p>
+      <table>
+        <tr><th>言い方の例</th><th>どうなるか</th></tr>
+        <tr><td><span class="say">在庫を聞いたら、堺 原料だけ答えて。手帳にメモして</span></td><td>ふだんは堺 原料だけ答える（「全倉庫で」と言えば全部）</td></tr>
+        <tr><td><span class="say">答えはもっと短くして。手帳にメモして</span></td><td>次から短く答える</td></tr>
+        <tr><td><span class="say">数字は単位まで言って。手帳にメモして</span></td><td>個・キロなどを必ず添える</td></tr>
+      </table>
+      <div class="tip"><b>メモしますか？と聞かれたら</b>答え方を直すと、ハヤトから「手帳にメモしておきますか」と聞いてきます。「はい」で書き込みます。</div>
+      <div class="ok"><b>手帳とは別に「記憶」もあります</b>あなたの担当や好みなど、会話に出てきたことを自動で覚えます（設定でオフにできます）。</div>
+      <p style="font-size:14px;color:var(--muted);margin-top:10px">手帳の内容を消したり直したりしたいときは、管理者に頼んでください。</p>
+    </div>
+  </div>
+</section>
+
+<section id="s7">
+  <h2><span class="num">7</span>会社の決まりを提案する</h2>
+  <div class="row">
+    <figure><img class="shot" src="img/propose.jpg" alt="会社の決まりの提案"><figcaption>「はい」で管理者に提案</figcaption></figure>
+    <div>
+      <p>皆が守ったほうがよい仕事の決まりを教えると、ハヤトが「<b>会社の決まりとして管理者に提案しますか</b>」と聞きます。</p>
+      <ol class="steps">
+        <li>例：<span class="say">出荷前の検品は2人でやる決まりだよ</span></li>
+        <li>「<b>はい、提案して</b>」→ 管理者に届きます。</li>
+        <li>管理者が<b>採用</b>すると、<b>全員のハヤト</b>がその決まりを守るようになります（10分ほどで反映）。</li>
+      </ol>
+      <div class="tip"><b>手帳との違い</b>「メモして」は<b>自分だけ</b>の答え方。「提案」は<b>会社全体</b>の決まり。</div>
+    </div>
+  </div>
+</section>
+
+<section id="s8">
+  <h2><span class="num">8</span>今日の予定・朝礼の内容</h2>
+  <div class="row">
+    <figure><img class="shot" src="img/schedule.jpg" alt="今日の予定"><figcaption>朝礼メモから答えます</figcaption></figure>
+    <div>
+      <p>毎朝の朝礼は、ハヤトが聞き取って<b>朝礼メモ</b>（予定・注意事項）に残しています。朝礼に出られなかった人も、あとで確かめられます。</p>
+      <p><span class="say">今日の予定は？</span>　<span class="say">今日の注意事項は？</span>　<span class="say">昨日の朝礼の内容は？</span></p>
+      <div class="tip"><b>Chat でも</b>朝礼メモの要点は、Google Chat にも届きます。</div>
+    </div>
+  </div>
+</section>
+
+<section id="s9">
+  <h2><span class="num">9</span>号機のカメラを見る</h2>
+  <div class="row">
+    <figure><img class="shot" src="img/camera.jpg" alt="カメラの映像"><figcaption>Wチェックのカメラのライブ映像</figcaption></figure>
+    <div>
+      <p><span class="say">NW5 のカメラ見せて</span>　<span class="say">NW4 の様子を見せて</span></p>
+      <p>Wチェックシステムのカメラの映像が画面に出ます。「閉じる」で終わります。</p>
+      <div class="warn"><b>社内の Wi-Fi のときだけ映ります</b>初めての端末では、一度 <code>https://192.168.1.240:5051</code> を開き「詳細設定 → アクセスする」を押してください（映らないときの画面にも案内が出ます）。</div>
+    </div>
+  </div>
+</section>
+
+<section id="s10">
+  <h2><span class="num">10</span>履歴と設定</h2>
+  <div class="row">
+    <figure><img class="shot" src="img/settings.jpg" alt="設定の画面"><figcaption>設定</figcaption></figure>
+    <div>
+      <table>
+        <tr><th>履歴</th><td>これまでの会話と、ハヤトが何を調べたか（「在庫を調べました」など）が見られます</td></tr>
+        <tr><th>声</th><td>声の種類・話す速さを変えられます。「試聴」で確かめてから「保存」</td></tr>
+        <tr><th>記憶</th><td>「会話から自動で覚える」のオン／オフ。「覚えていることを見る」で一覧</td></tr>
+        <tr><th>マイク</th><td>話し終わったら自動で送るかどうか</td></tr>
+        <tr><th>ログアウト</th><td>ほかの人がその端末を使うとき</td></tr>
+      </table>
+      <div class="warn"><b>「ハヤトの接続先 URL」は変えないでください</b>変えると使えなくなります。</div>
+    </div>
+  </div>
+</section>
+
+<section id="s11">
+  <h2><span class="num">11</span>朝礼で使う（進行役・管理者向け）</h2>
+  <figure><img class="shot wide" src="img/chorei.jpg" alt="朝礼モード"><figcaption>PC の Chrome・Edge の右上「朝礼」ボタン</figcaption></figure>
+  <ol class="steps" style="margin-top:14px">
+    <li>PC でハヤトの画面を開き、右上の「<b>朝礼</b>」→「<b>開始</b>」→ <b>Meet の朝礼のタブ</b>を選び「タブの音声も共有する」をオン。</li>
+    <li>Meet で「画面を共有」→ <b>ハヤトのタブ</b>（タブの音声も共有）。皆にハヤトが映り、声も届きます。</li>
+    <li>朝礼の最後に「<b>総評お願い</b>」。ハヤトが朝礼のまとめ・安全の注意・前向きな一言を<b>約2分</b>話し、予定と注意事項を<b>朝礼メモ</b>と Chat に残します。</li>
+  </ol>
+  <div class="tip"><b>録音は残しません</b>音声はまとめに使ったら捨てます。ハヤト専用 PC で使うときの手順は、管理者の手順書を見てください。</div>
+</section>
+
+<section id="faq">
+  <h2>困ったとき</h2>
+  <table>
+    <tr><th>声が出ない</th><td>「読み上げ：オン」か、スマホの音量・マナーモードを確かめる。「もう一度」を押す</td></tr>
+    <tr><th>「通信に失敗しました」</th><td>電波を確かめて、もう一度送る。朝いちばんの1回目は少し時間がかかることがあります</td></tr>
+    <tr><th>答えがおかしい</th><td>製品コードや言い方を変えて聞き直す。「リセット」で話の流れを切ってから聞くのも効きます</td></tr>
+    <tr><th>合言葉を忘れた</th><td>管理者に「合言葉の決め直し」を頼む → 同じ名前・新しい合言葉・招待コードで登録し直す</td></tr>
+    <tr><th>資料が開けない</th><td>会社資料は管理者の許可が必要（許可から24時間）。期限が切れたら、もう一度「見せて」</td></tr>
+    <tr><th>カメラが映らない</th><td>社内の Wi-Fi か確かめる。<a href="#s9">9. カメラ</a>の「初めての端末では」を行う</td></tr>
+  </table>
+  <div class="warn"><b>気をつけること</b>パスワード・カード番号などの秘密は、ハヤトに話さないでください。ハヤトは間違えることもあります。在庫の数や資料の数字など、大事なことは元の画面や資料でも確かめてください。</div>
+</section>
+
+</main>
+<footer><a href="hayato-guide.pdf">印刷用 PDF</a>　｜　<a href="../">ハヤトを開く</a><br>AIハヤト 使い方ガイド　2026年10月　株式会社マツバヤシ</footer>
+</body>
+</html>
