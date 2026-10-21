@@ -55,6 +55,8 @@
   #dock > * { max-width: 760px; margin-left: auto; margin-right: auto; }
   #status { text-align: center; font-size: 13px; letter-spacing: .25em; color: var(--text); padding: 18px 0 8px;
             text-shadow: 0 0 12px rgba(80, 160, 255, .45); }
+  #uploadCancel { display: block; margin: -2px auto 8px; border-color: var(--error); color: var(--error); }
+  #uploadCancel[hidden] { display: none; }
   #status::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #4fd1ff;
                     margin-right: 10px; vertical-align: middle; box-shadow: 0 0 8px #4fd1ff; animation: blink 2.4s ease-in-out infinite; }
   body.busy #status::before { animation-duration: .6s; }
@@ -229,6 +231,7 @@
 
 <div id="dock">
   <div id="status">接続確立。待機中。</div>
+  <button type="button" class="icon-btn" id="uploadCancel" hidden>アップロードを中止</button>
   <form id="form">
     <button class="mic" id="btnMic" type="button" title="マイクで話しかける" aria-label="マイク" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -576,10 +579,12 @@ function runBase(url) { return String(url).replace(/\/+$/, ''); }
 // 問い合わせ先（Cloud Run なら …/api、GAS ならそのまま）。登録・承認待ちの確認も必ずこれを通す
 function apiUrl(url) { return isCloudRun(url) ? runBase(url) + '/api' : url; }
 
-async function callServerNow(url, payload) {
+// signal：途中でやめるとき用（AbortController）
+async function callServerNow(url, payload, signal) {
   const s = loadSettings();
   const body = Object.assign({ user: s.user, password: s.password }, payload);
   const res = await fetch(apiUrl(url), {
+    signal,
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(body),
@@ -1584,30 +1589,49 @@ async function uploadFiles(items, folderName) {
   // 送っている途中で画面を閉じようとしたら、止まることを知らせる
   const warn = e => { e.preventDefault(); e.returnValue = ''; };
   window.addEventListener('beforeunload', warn);
-  try {
-    for (let i = 0; i < total; i++) {
-      const { file, path } = list[i];
-      $('status').textContent = '資料をアップロード中（' + (i + 1) + ' / ' + total + '）。';
-      if (total > 1) setCaption('hayato', total + '件中 ' + (i + 1) + '件目を送っています…\n' + (path ? path + '/' : '') + file.name);
+  // 中止ボタン：まだ送っていないものは送らず、送っている途中のものも打ち切る（送り終わったものは残る）
+  const stopper = new AbortController();
+  let cancelled = false;
+  $('uploadCancel').hidden = false;
+  $('uploadCancel').onclick = () => { cancelled = true; stopper.abort(); $('uploadCancel').hidden = true; };
+  // Cloud Run 版は、同時に3件ずつ送る（GAS 版は同時に送ると詰まるので1件ずつ）
+  const lanes = isCloudRun(s.url) ? Math.min(3, total) : 1;
+  let next = 0, finished = 0;
+  const progress = name => {
+    $('status').textContent = '資料をアップロード中（' + finished + ' / ' + total + '件 済み）。';
+    if (total > 1) setCaption('hayato', total + '件中 ' + finished + '件を送りました…' + (name ? '\n' + name : ''));
+  };
+  const lane = async () => {
+    while (!cancelled && next < total) {
+      const { file, path } = list[next++];
+      progress((path ? path + '/' : '') + file.name);
       try {
         const data = await readBase64(file);
-        const res = await callServer(s.url, { action: 'upload', fileName: file.name, mimeType: file.type || '', data, path });
+        const payload = { action: 'upload', fileName: file.name, mimeType: file.type || '', data, path };
+        const res = lanes > 1 ? await callServerNow(s.url, payload, stopper.signal) : await callServer(s.url, payload);
         done.push(res.name);
         if (res.id) sent.push({ id: res.id, name: res.name });
         if (res.note) notes.add(res.note);
       } catch (err) {
-        failed.push(file.name + '（' + err.message + '）');
+        if (!cancelled) failed.push(file.name + '（' + err.message + '）');
       }
+      finished++;
+      progress('');
     }
+  };
+  try {
+    progress('');
+    await Promise.all(Array.from({ length: lanes }, lane));
     if (done.length) addMsg('memo', '資料をアップロードしました：' + (folderName ? folderName + ' フォルダー ' : '') + done.length + '件' + (done.length <= 5 ? '（' + done.join('、') + '）' : ''));
     busy = false;
     let reply;
-    if (!done.length) reply = 'アップロードできませんでした。';
+    if (cancelled) reply = 'アップロードを中止しました。' + (done.length ? '送り終わった ' + done.length + '件は資料フォルダに入っています。' : '') + '（中止したときに送っている途中だったものも、入っている場合があります）';
+    else if (!done.length) reply = 'アップロードできませんでした。';
     else if (total === 1) reply = done[0] + ' を受け取りました。';
     else reply = (folderName ? 'フォルダー「' + folderName + '」の資料を' : '資料を') + done.length + '件受け取りました。';
     if (failed.length) reply += '送れなかったもの ' + failed.length + '件：' + failed.slice(0, 5).join('、') + (failed.length > 5 ? ' ほか' : '') + '。';
     if (skipped.length) reply += '送らなかったもの：' + skipped.slice(0, 5).join('、') + (skipped.length > 5 ? ' ほか' : '') + '。';
-    if (done.length) reply += notes.size ? [...notes].join('') : '内容について聞くか、「精査して」と言ってください。';
+    if (done.length && !cancelled) reply += notes.size ? [...notes].join('') : '内容について聞くか、「精査して」と言ってください。';
     // 送った資料は30分のあいだ「今送った資料」として、次の質問に添える（「これを精査して」で使えるように）
     if (sent.length) { recentUploads = { files: sent.slice(0, 5), at: Date.now() }; renderReviewButton(); }
     setCaption('hayato', reply);
@@ -1623,6 +1647,7 @@ async function uploadFiles(items, folderName) {
       speakReply(lastReply);
     } else doneSpeaking();
   } finally {
+    $('uploadCancel').hidden = true;
     window.removeEventListener('beforeunload', warn);
     busy = false; btnSend.disabled = false; btnMic.disabled = false; $('btnUpload').disabled = false;
     document.body.classList.remove('busy');
