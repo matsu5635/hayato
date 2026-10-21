@@ -1171,7 +1171,12 @@ async function checkInbox() {
     inboxBusy = false;
   }
 }
-setInterval(checkInbox, 5 * 60 * 1000);
+setInterval(checkInbox, 2 * 60 * 1000);
+// スマホで別のアプリから戻ってきたときは、すぐ確かめる（裏にある間は時計が止まっていることがあるため）
+let inboxLast = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Date.now() - inboxLast > 30000) { inboxLast = Date.now(); checkInbox(); }
+});
 
 // --- 入力欄 ---
 $('form').addEventListener('submit', (e) => {
