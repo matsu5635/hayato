@@ -146,6 +146,14 @@
   #viewer { position: fixed; inset: 0; z-index: 9; display: flex; flex-direction: column; background: rgba(9, 15, 28, .96); }
   #viewer[hidden] { display: none; }
   #viewer .bar { display: flex; align-items: center; gap: 8px; padding: calc(10px + env(safe-area-inset-top)) 12px 10px; border-bottom: 1px solid var(--line); }
+  .close-big { flex: none; background: var(--accent); color: #06121f; border: 0; border-radius: 999px; padding: 9px 16px; font-size: 15px; font-weight: 700;
+               cursor: pointer; box-shadow: 0 2px 10px rgba(79, 179, 217, .45); }
+  .close-big:active { transform: scale(.96); }
+  /* スマホでは、画面の下にも大きな「閉じる」を出す（親指で押しやすく、迷わないように） */
+  #viewerCloseBottom { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 10;
+                       padding: 12px 28px; font-size: 16px; }
+  #viewerCloseBottom:active { transform: translateX(-50%) scale(.96); }
+  #viewer[hidden] ~ #viewerCloseBottom, #viewerCloseBottom[hidden] { display: none; }
   #viewer .bar .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
   /* 資料は絵（canvas）として描く。保存・長押し・選択・印刷をさせない */
   #viewer .pages { flex: 1; overflow: auto; padding: 12px; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
@@ -276,9 +284,10 @@
     <span class="name" id="viewerName"></span>
     <button class="icon-btn zoom" id="viewerOut" type="button" aria-label="縮小">－</button>
     <button class="icon-btn zoom" id="viewerIn" type="button" aria-label="拡大">＋</button>
-    <button class="icon-btn" id="viewerClose" type="button">閉じる</button>
+    <button class="close-big" id="viewerClose" type="button" aria-label="閉じる">✕ 閉じる</button>
   </div>
   <div class="pages" id="viewerPages"></div>
+  <button class="close-big" id="viewerCloseBottom" type="button" aria-label="閉じる">✕ 閉じる</button>
 </div>
 
 <!-- 初回の登録・ログイン・承認待ち（使えるようになるまで、ハヤトの上に重ねて出す） -->
@@ -321,7 +330,7 @@
 </div>
 
 <aside id="history" aria-label="これまでの会話">
-  <div class="head">これまでの会話 <button class="icon-btn" id="btnHistoryClose" type="button">閉じる</button></div>
+  <div class="head">これまでの会話 <button class="close-big" id="btnHistoryClose" type="button" aria-label="閉じる">✕ 閉じる</button></div>
   <div id="log"></div>
 </aside>
 
@@ -1287,8 +1296,8 @@ $('btnSpeak').addEventListener('click', () => {
 });
 
 // --- 履歴 ---
-$('btnHistory').addEventListener('click', () => { $('history').classList.add('open'); log.scrollTop = log.scrollHeight; });
-$('btnHistoryClose').addEventListener('click', () => $('history').classList.remove('open'));
+$('btnHistory').addEventListener('click', () => { $('history').classList.add('open'); log.scrollTop = log.scrollHeight; pushBackLayer('history'); });
+$('btnHistoryClose').addEventListener('click', () => { $('history').classList.remove('open'); popBackLayer('history'); });
 
 // --- リセット ---
 $('btnClear').addEventListener('click', () => {
@@ -1770,7 +1779,7 @@ function renderCameraButtons(cameras) {
 }
 
 function openCameras(cameras) {
-  closeViewer();
+  closeViewer('reset');
   $('viewerName').textContent = '📷 ' + [...new Set(cameras.map(c => c.machine))].join('・') + ' のカメラ';
   $('viewerIn').hidden = $('viewerOut').hidden = true;
   const box = $('viewerPages');
@@ -1803,9 +1812,34 @@ function openCameras(cameras) {
     box.append(cap, img);
   });
   $('viewer').hidden = false;
+  pushBackLayer('viewer');
 }
 
-function closeViewer() {
+// スマホの「戻る」ボタン対策：表示を開いたら履歴を1つ積み、「戻る」ではその表示を閉じるだけにする
+const backLayers = [];   // 開いている表示（上が最後に開いたもの）
+function pushBackLayer(name) {
+  if (backLayers.includes(name)) return;
+  backLayers.push(name);
+  window.history.pushState({ hayato: name }, '');   // history は会話の記録の名前に使っているので window. を付ける
+}
+// ボタンで閉じたときは、積んだ履歴も1つ戻しておく（次の「戻る」でアプリが閉じないように）
+function popBackLayer(name) {
+  const i = backLayers.lastIndexOf(name);
+  if (i < 0) return;
+  backLayers.splice(i, 1);
+  ignorePop++;
+  window.history.back();
+}
+let ignorePop = 0;
+window.addEventListener('popstate', () => {
+  if (ignorePop) { ignorePop--; return; }
+  const name = backLayers.pop();
+  if (name === 'viewer') closeViewer(true);
+  else if (name === 'history') $('history').classList.remove('open');
+});
+
+function closeViewer(fromBack) {
+  if (!fromBack && !$('viewer').hidden) popBackLayer('viewer');
   // カメラの映像は流れ続けるので、src を外して接続を切る
   $('viewerPages').querySelectorAll('img.cam').forEach(img => { img.onerror = null; img.src = ''; });
   $('viewerIn').hidden = $('viewerOut').hidden = false;
@@ -1824,10 +1858,11 @@ async function openDocument(f, button) {
     const res = await callServer(s.url, { action: 'file', fileId: f.id });
     const bytes = Uint8Array.from(atob(res.data), c => c.charCodeAt(0));
     const mime = res.mimeType || 'application/pdf';
-    closeViewer();
+    closeViewer('reset');
     viewerZoom = 1;
     $('viewerName').textContent = res.name;
     $('viewer').hidden = false;
+  pushBackLayer('viewer');
     if (/^image\//.test(mime)) {
       // 写真などはそのまま 1 枚表示（ダウンロード用のリンクは作らない）
       const img = new Image();
@@ -1855,7 +1890,8 @@ async function openDocument(f, button) {
   }
 }
 
-$('viewerClose').addEventListener('click', closeViewer);
+$('viewerClose').addEventListener('click', () => closeViewer());
+$('viewerCloseBottom').addEventListener('click', () => closeViewer());
 $('viewerIn').addEventListener('click', () => { if (viewerDoc && viewerZoom < 3) { viewerZoom = Math.round((viewerZoom + 0.5) * 10) / 10; renderPages(); } });
 $('viewerOut').addEventListener('click', () => { if (viewerDoc && viewerZoom > 1) { viewerZoom = Math.max(1, viewerZoom - 0.5); renderPages(); } });
 // 資料の上では右クリック（画像として保存）を出さない
