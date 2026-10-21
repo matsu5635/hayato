@@ -1144,6 +1144,35 @@ async function speakLong(s, text) {
   }
 }
 
+// ============================================================
+// 伝言：ほかの人が「〇〇さんに伝えて」と預けた伝言を、開いたときと5分ごとに確かめて伝える（Cloud Run 版だけ）
+// ============================================================
+let inboxBusy = false;
+async function checkInbox() {
+  const s = loadSettings();
+  if (inboxBusy || busy || !s.user || !s.password || !isCloudRun(s.url) || !$('gate').hidden) return;
+  inboxBusy = true;
+  try {
+    const res = await callServer(s.url, { action: 'inbox' });
+    const list = res.messages || [];
+    if (!list.length) return;
+    const text = list.length === 1
+      ? list[0].送り主 + 'さんから伝言です。' + list[0].内容
+      : '伝言が' + list.length + '件あります。' + list.map(m => m.送り主 + 'さんから。' + m.内容).join('　');
+    const shown = '📩 ' + text + '\n\n' + list.map(m => '・' + m.送り主 + 'さん（' + m.日時 + '）：' + m.内容).join('\n');
+    addMsg('hayato', shown);
+    lastReply = { reply: text, shown };
+    setCaption('hayato', shown);
+    toast('📩 ' + list.map(m => m.送り主 + 'さん').join('、') + 'から伝言があります');
+    if (s.speak) await speakLong(s, text);
+  } catch (e) {
+    console.warn('伝言の確認に失敗：' + e.message);
+  } finally {
+    inboxBusy = false;
+  }
+}
+setInterval(checkInbox, 5 * 60 * 1000);
+
 // --- 入力欄 ---
 $('form').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -1453,6 +1482,7 @@ function afterStatus(status, message) {
   if (status === '承認済み') {
     hideGate();
     setCaption('hayato', (loadSettings().user || '') + 'さん、ご用件をどうぞ。');
+    setTimeout(checkInbox, 1500);   // 伝言があれば伝える
     if (message) toast(message);
   } else if (status === '承認待ち') {
     showGate('wait', message);
@@ -1835,6 +1865,7 @@ setGateMode('register');
   if (!s.url || !s.user || !s.password) { if (s.user) setGateMode('login'); showGate('form'); return; }
   setCaption('hayato', s.user + 'さん、ご用件をどうぞ。');
   checkApproval();   // 承認の状態を確かめる（承認済みなら何も出さない）
+  setTimeout(checkInbox, 1500);   // 伝言があれば伝える
 })();
 </script>
 </body>
