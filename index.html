@@ -2062,6 +2062,13 @@ function renderFileButtons(files) {
   files.forEach(f => {
     const b = document.createElement('button');
     b.type = 'button';
+    if (f.url) {
+      // 覚えたスプレッドシート（リンク資料）：元の表を新しいタブで開く（押したときに開くので、ポップアップ止めに掛からない）
+      b.textContent = '📊 ' + f.name + '　開く';
+      b.addEventListener('click', () => window.open(f.url, '_blank', 'noopener'));
+      box.appendChild(b);
+      return;
+    }
     b.className = f.state === '開ける' ? '' : 'wait';
     b.textContent = '📄 ' + f.name + (f.state === '開ける' ? '　開く' : f.state === '許可待ち' ? '（許可待ち・押すと確認）' : '（開けません）');
     b.addEventListener('click', () => openDocument(f, b));
