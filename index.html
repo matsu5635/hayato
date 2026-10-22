@@ -364,12 +364,14 @@
     <button class="icon-btn" id="btnTry" type="button">試聴</button>
   </div>
   <p class="note" id="voiceNote"></p>
-  <label for="setSink">声の出し先</label>
+  <label for="setSink">声の出し先（ふだん）</label>
   <div class="inline">
     <select id="setSink"><option value="">（PC の既定のスピーカー）</option></select>
     <button class="icon-btn" id="btnSinks" type="button">一覧を取得</button>
   </div>
-  <p class="note" id="sinkNote">Meet にハヤトとして参加させるときは「CABLE Input」を選び、ハヤトの Meet のマイクを「CABLE Output」にします（画面共有なしで声だけ届きます）。</p>
+  <label for="setChoreiSink">朝礼のときの声の出し先</label>
+  <div class="inline"><select id="setChoreiSink"><option value="">（ふだんと同じ）</option></select></div>
+  <p class="note" id="sinkNote">朝礼で Meet に声だけ届けるときは、朝礼のときの出し先を「CABLE Input」にし、ハヤトの Meet のマイクを「CABLE Output」にします。朝礼の「開始」から総評を話し終わるまでだけ切り替わり、終わるとふだんの出し先に戻ります。</p>
 
   <h3>部署</h3>
   <select class="dept" id="setDept"><option value="">（読み込み中…）</option></select>
@@ -576,6 +578,11 @@ function loadSettings() {
   if (s.autoSend === undefined) s.autoSend = true;
   if (s.memory === undefined) s.memory = true;
   s.voice = Object.assign({ name: '', rate: 1.05, pitch: -2 }, s.voice);
+  if (s.choreiSink === undefined && /CABLE/i.test(s.sink || '')) {
+    s.choreiSink = s.sink;
+    s.sink = '';
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(s)); } catch {}
+  }
   return s;
 }
 function saveSettings(s) {
@@ -713,13 +720,26 @@ async function applySink(label) {
   return '';
 }
 // 開いたとき・機器をつないだり外したりしたときに、保存してある出し先にする
-applySink(loadSettings().sink).then(msg => { if (msg) toast(msg); }).catch(() => {});
-if (navigator.mediaDevices) navigator.mediaDevices.addEventListener('devicechange', () => applySink(loadSettings().sink).catch(() => {}));
+// 朝礼の「開始」から総評を話し終わるまでは「朝礼のときの出し先」、それ以外は「ふだんの出し先」
+let choreiSinkActive = false;
+function currentSink() {
+  const s = loadSettings();
+  return choreiSinkActive && s.choreiSink ? s.choreiSink : s.sink;
+}
+function setChoreiSink(on) {
+  choreiSinkActive = on;
+  return applySink(currentSink()).then(msg => { if (msg) toast(msg); }).catch(() => {});
+}
+applySink(currentSink()).then(msg => { if (msg) toast(msg); }).catch(() => {});
+if (navigator.mediaDevices) navigator.mediaDevices.addEventListener('devicechange', () => applySink(currentSink()).catch(() => {}));
 function addSinkOption(label) {
-  if (!label || [...$('setSink').options].some(o => o.value === label)) return;
-  const o = document.createElement('option');
-  o.value = o.textContent = label;
-  $('setSink').appendChild(o);
+  if (!label) return;
+  ['setSink', 'setChoreiSink'].forEach(id => {
+    if ([...$(id).options].some(o => o.value === label)) return;
+    const o = document.createElement('option');
+    o.value = o.textContent = label;
+    $(id).appendChild(o);
+  });
 }
 
 function doneSpeaking() {
@@ -1082,6 +1102,7 @@ function choreiStop() {
   $('choreiReview').textContent = '総評お願い';
   $('btnChorei').classList.remove('on');
   choreiState('聞き取っていません');
+  setChoreiSink(false);
 }
 
 $('choreiStart').addEventListener('click', async () => {
@@ -1112,6 +1133,7 @@ $('choreiStart').addEventListener('click', async () => {
     chorei.chunks = [];
     chorei.retry = null;
     $('choreiReview').textContent = '総評お願い';
+    setChoreiSink(true);   // ここから総評を話し終わるまで、声は朝礼のときの出し先（Meet）へ
     rec.ondataavailable = e => { if (e.data && e.data.size) chorei.chunks.push(e.data); };
     rec.start(5000);
     chorei.rec = rec;
@@ -1155,6 +1177,7 @@ $('choreiReview').addEventListener('click', async () => {
   }
   const mime = blob.type;
   let sent = false;
+  await setChoreiSink(true);
   const s = loadSettings();
   busy = true; btnSend.disabled = true; btnMic.disabled = true;
   stage.startSearch();
@@ -1178,7 +1201,7 @@ $('choreiReview').addEventListener('click', async () => {
     chorei.retry = null;
     $('choreiReview').textContent = '総評お願い';
     choreiState('まとめました。朝礼メモと Chat に残しました。', false);
-    if (s.speak) await speakLong(s, total); else doneSpeaking();
+    if (s.speak) { await speakLong(s, total); await speechFinished(); } else doneSpeaking();
   } catch (err) {
     busy = false;
     if (!sent) chorei.retry = blob;   // 録音は捨てずに残す（「もう一度送る」で送り直せる）
@@ -1192,10 +1215,23 @@ $('choreiReview').addEventListener('click', async () => {
     $('choreiStart').disabled = false;
     $('btnChorei').classList.remove('on');
     if (chorei.retry) { $('choreiReview').disabled = false; $('choreiReview').textContent = 'もう一度送る'; }
+    setChoreiSink(false);   // 総評を話し終わった（または失敗した）ので、ふだんの出し先に戻す
   }
 });
 
 // 長い文を、最初の一文だけ先に声にして読み始め、その間に残りを作って続ける
+// 話し終わるのを待つ（続きの声を待っている間は終わりにしない。念のため最長6分）
+function speechFinished() {
+  return new Promise(ok => {
+    const start = Date.now();
+    const check = () => {
+      const quiet = (player.paused || player.ended) && !audioQueue.length && !moreAudioComing && !waitingForMore;
+      if ((quiet && Date.now() - start > 1500) || Date.now() - start > 6 * 60 * 1000) ok(); else setTimeout(check, 500);
+    };
+    setTimeout(check, 500);
+  });
+}
+
 async function speakLong(s, text) {
   const [head, rest] = splitFirstSentence(text);
   let audio = null;
@@ -1423,7 +1459,9 @@ function openSettings() {
   $('setAutoSend').checked = s.autoSend;
   $('setMemory').checked = s.memory;
   addSinkOption(s.sink);
+  addSinkOption(s.choreiSink);
   $('setSink').value = s.sink || '';
+  $('setChoreiSink').value = s.choreiSink || '';
   audioOutputs(false).then(list => list.forEach(d => addSinkOption(d.label))).catch(() => {});
   $('memoryList').hidden = true;
   voiceNote.textContent = '';
@@ -1436,13 +1474,14 @@ $('btnSinks').addEventListener('click', async () => {
     const list = await audioOutputs(true);
     list.forEach(d => addSinkOption(d.label));
     const cable = list.find(d => /CABLE Input/i.test(d.label));
-    $('sinkNote').textContent = list.length + '個の出し先があります。' + (cable ? 'Meet 用は「' + cable.label + '」です。' : '（CABLE Input が無ければ、VB-CABLE を入れて PC を再起動してください）');
+    $('sinkNote').textContent = list.length + '個の出し先があります。' + (cable ? '朝礼のときの出し先は「' + cable.label + '」にします。' : '（CABLE Input が無ければ、VB-CABLE を入れて PC を再起動してください）');
   } catch (err) {
     $('sinkNote').textContent = '取得に失敗しました：' + err.message;
   }
 });
 // 選んだら、試聴もその出し先で聞けるように、すぐ切り替える（保存は「保存」で）
 $('setSink').addEventListener('change', () => applySink($('setSink').value).then(msg => { if (msg) $('sinkNote').textContent = msg; }));
+$('setChoreiSink').addEventListener('change', () => applySink($('setChoreiSink').value || $('setSink').value).then(msg => { if (msg) $('sinkNote').textContent = msg; }));
 
 $('btnVoices').addEventListener('click', async () => {
   const url = $('setUrl').value.trim() || loadSettings().url, passcode = loadSettings().password;
@@ -1505,7 +1544,7 @@ $('btnMemories').addEventListener('click', async () => {
 $('setRate').addEventListener('input', renderRangeOutputs);
 $('setPitch').addEventListener('input', renderRangeOutputs);
 $('btnSettings').addEventListener('click', openSettings);
-$('setCancel').addEventListener('click', () => { stopSpeaking(); applySink(loadSettings().sink); dlg.close(); });   // 選びかけた出し先は元に戻す
+$('setCancel').addEventListener('click', () => { stopSpeaking(); applySink(currentSink()); dlg.close(); });   // 選びかけた出し先は元に戻す
 $('setSave').addEventListener('click', () => {
   const s = loadSettings();
   s.url = $('setUrl').value.trim();
@@ -1513,8 +1552,9 @@ $('setSave').addEventListener('click', () => {
   s.autoSend = $('setAutoSend').checked;
   s.memory = $('setMemory').checked;
   s.sink = $('setSink').value;
+  s.choreiSink = $('setChoreiSink').value;
   saveSettings(s);
-  applySink(s.sink).then(msg => { if (msg) toast(msg); });
+  applySink(currentSink()).then(msg => { if (msg) toast(msg); });
   stopSpeaking();
   dlg.close();
   input.focus();
