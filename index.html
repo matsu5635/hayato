@@ -394,6 +394,14 @@
   <select class="dept" id="setDept"><option value="">（読み込み中…）</option></select>
   <p class="note" id="deptNote">「今日の予定は？」で、この部署のカレンダーから答えます。変えるとすぐ保存されます。</p>
 
+  <h3>自分のカレンダー</h3>
+  <div class="inline">
+    <input id="setMyCal" type="text" placeholder="例：taro.yamada@k-matsubayashi.com" autocomplete="off">
+    <button class="icon-btn" id="btnMyCal" type="button">確かめて登録</button>
+  </div>
+  <p class="note" id="myCalNote">登録すると「私の予定は？」で、自分の Google カレンダーを読みます（本人にしか見えません。読むだけです）。<br>
+    先に Google カレンダーの「設定と共有」→「特定のユーザーまたはグループと共有する」で、<b id="myCalAccount">hayato-server@ai-hayato-512101.iam.gserviceaccount.com</b> を「予定の表示（すべての予定の詳細）」で追加してください。外すときは空にして「確かめて登録」。</p>
+
   <h3>記憶</h3>
   <label class="check"><input id="setMemory" type="checkbox" checked> 会話から自動で覚える</label>
   <div class="inline" style="margin-top:8px">
@@ -1447,6 +1455,23 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && Date.now() - inboxLast > 30000) { inboxLast = Date.now(); checkInbox(); }
 });
 
+// 自分のカレンダー：サーバーが本当に読めるかを確かめてから登録する（読めなければ共有の案内を出す）
+$('btnMyCal').addEventListener('click', async () => {
+  const s = loadSettings();
+  const cal = $('setMyCal').value.trim();
+  $('btnMyCal').disabled = true;
+  $('myCalNote').textContent = cal ? '確かめています…' : '登録を外しています…';
+  try {
+    const r = await callServer(s.url, { action: 'set_calendar', calendar: cal });
+    $('setMyCal').value = r.calendar || '';
+    $('myCalNote').textContent = r.calendar ? '登録しました。「私の予定は？」と聞いてみてください。' : '自分のカレンダーの登録を外しました。';
+  } catch (e) {
+    $('myCalNote').textContent = e.message;
+  } finally {
+    $('btnMyCal').disabled = false;
+  }
+});
+
 $('setDept').addEventListener('change', async () => {
   const s = loadSettings();
   try {
@@ -1610,6 +1635,10 @@ function openSettings() {
     $('setDept').disabled = admin;
     $('deptNote').textContent = admin ? '管理者として登録されています（全部署の予定を見られます）。変えるときは管理シートで。'
                                       : '「今日の予定は？」で、この部署のカレンダーから答えます。変えるとすぐ保存されます。';
+    if (res) {
+      $('setMyCal').value = res.calendar || '';
+      if (res.serverAccount) $('myCalAccount').textContent = res.serverAccount;
+    }
   });
   $('setUrl').value = s.url || '';
   $('setUserName').textContent = s.user || '（未登録）';
