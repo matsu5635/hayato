@@ -1102,6 +1102,7 @@ async function askHayatoStream(s, text, turn, mine) {
 //   以前は録音を丸ごと最後に送っていたが、長いとサーバーのメモリを超えて止まった（2026-10-22）。小分けにして解決
 // ============================================================
 const SEGMENT_MS = 10000;                    // 10秒ごとに区切って文字にする
+const SILENCE_RMS = 0.008;                   // 10秒の間の一番大きな音がこれより小さければ無音とみなし、送らない（無音を送ると「お疲れ様でした」などを作られる）
 const MEET_MAX_MIN = 180;                    // 3時間で自動でまとめる
 const MEET_BACKUP_KEY = 'hayato.meet.backup';
 const ACK_TEXT = 'はい、少しお待ちください。';
@@ -1197,9 +1198,10 @@ function offerBackup() {
 // ---- 10秒ごとの録音 ----
 function startSegment() {
   const rec = new MediaRecorder(meet.dest.stream, { mimeType: meet.mime, audioBitsPerSecond: 24000 });
-  const parts = [], at = Date.now();
+  const parts = [], at = Date.now(), seg = { peak: 0 };
+  meet.seg = seg;
   rec.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
-  rec.onstop = () => sendSegment(new Blob(parts, { type: rec.mimeType || 'audio/webm' }), at);
+  rec.onstop = () => sendSegment(new Blob(parts, { type: rec.mimeType || 'audio/webm' }), at, seg.peak);
   rec.start();
   meet.rec = rec;
 }
@@ -1208,8 +1210,18 @@ function rotateSegment() {
   startSegment();                                         // 先に次を始めてから止める（切れ目で言葉が抜けないように）
   if (old && old.state !== 'inactive') old.stop();
 }
-async function sendSegment(blob, at) {
+// 音の大きさを0.2秒ごとに測り、今の切れ端の一番大きな値を覚えておく
+function measureLevel() {
+  if (!meet.analyser || !meet.seg) return;
+  const buf = meet.levelBuf;
+  meet.analyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  meet.seg.peak = Math.max(meet.seg.peak, Math.sqrt(sum / buf.length));
+}
+async function sendSegment(blob, at, peak) {
   if (blob.size < 1500) return;                           // ほとんど無音
+  if (meet.analyser && peak < SILENCE_RMS) return;        // 誰も話していない
   const seq = ++meet.seq, kind = meet.kind;
   meet.pending++;
   try {
@@ -1260,8 +1272,9 @@ function choreiStop() {
   clearInterval(meet.rotateTimer);
   if (meet.rec && meet.rec.state !== 'inactive') { meet.rec.onstop = null; meet.rec.stop(); }
   meet.streams.forEach(st => st.getTracks().forEach(t => t.stop()));
+  clearInterval(meet.levelTimer);
   if (meet.ctx) meet.ctx.close().catch(() => {});
-  Object.assign(meet, { rec: null, streams: [], ctx: null, dest: null, recording: false, retry: false, items: [], pending: 0 });
+  Object.assign(meet, { rec: null, streams: [], ctx: null, dest: null, analyser: null, seg: null, recording: false, retry: false, items: [], pending: 0 });
   $('choreiStart').disabled = false;
   $('choreiReview').disabled = true;
   $('btnChorei').classList.remove('on');
@@ -1292,6 +1305,11 @@ $('choreiStart').addEventListener('click', async () => {
     const dest = ctx.createMediaStreamDestination();
     ctx.createMediaStreamSource(new MediaStream(tab.getAudioTracks())).connect(dest);
     if (mic) ctx.createMediaStreamSource(mic).connect(dest);
+    // 無音の切れ端を見分けるため、録音と同じ音の大きさを測る
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    ctx.createMediaStreamSource(dest.stream).connect(analyser);
+    Object.assign(meet, { analyser, levelBuf: new Float32Array(analyser.fftSize), levelTimer: setInterval(measureLevel, 200) });
     Object.assign(meet, { ctx, dest, kind: meetKind(), items: [], seq: 0, pending: 0, retry: false, recording: true, started: Date.now(), lastAnswerEnd: 0,
                           mime: ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'].find(t => MediaRecorder.isTypeSupported(t)) || '' });
     renderMeetLog();
@@ -1340,8 +1358,9 @@ $('choreiReview').addEventListener('click', async () => {
     await new Promise(ok => setTimeout(ok, 800));         // 止めた切れ端が送り始められるのを待つ
     while ((meet.pending > 0 || meet.answering) && Date.now() < until) await new Promise(ok => setTimeout(ok, 300));
     meet.streams.forEach(st => st.getTracks().forEach(t => t.stop()));
+    clearInterval(meet.levelTimer);
     if (meet.ctx) meet.ctx.close().catch(() => {});
-    Object.assign(meet, { streams: [], ctx: null, dest: null, recording: false });
+    Object.assign(meet, { streams: [], ctx: null, dest: null, analyser: null, seg: null, recording: false });
   }
   const transcript = transcriptText();
   let done = false;
