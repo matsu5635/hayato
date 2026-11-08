@@ -1208,6 +1208,33 @@ function rotateSegment() {
   startSegment();                                         // 先に次を始めてから止める（切れ目で言葉が抜けないように）
   if (old && old.state !== 'inactive') old.stop();
 }
+// 朝礼は、10秒の切れ端とは別に録音を丸ごと残し、まとめのときに送る（切れ端だけだと社内の言葉を聞き違えやすい）
+const FULL_MAX_BYTES = 14 * 1024 * 1024;     // これより大きければ送らず、書き起こしからまとめる
+function startFullRecording() {
+  meet.full = null;
+  meet.fullBlob = null;
+  if (meet.kind !== '朝礼') return;
+  try {
+    const rec = new MediaRecorder(meet.dest.stream, { mimeType: meet.mime, audioBitsPerSecond: 24000 });
+    const full = { rec, parts: [] };
+    rec.ondataavailable = e => { if (e.data && e.data.size) full.parts.push(e.data); };
+    rec.start(30000);
+    meet.full = full;
+  } catch (e) { meet.full = null; }   // 録れなくても、書き起こしからまとめる
+}
+function stopFullRecording() {
+  const full = meet.full;
+  meet.full = null;
+  if (!full) return Promise.resolve();
+  return new Promise(ok => {
+    const done = () => { meet.fullBlob = new Blob(full.parts, { type: full.rec.mimeType || 'audio/webm' }); ok(); };
+    if (full.rec.state === 'inactive') return done();
+    full.rec.onstop = done;
+    full.rec.stop();
+    setTimeout(ok, 5000);
+  });
+}
+
 async function sendSegment(blob, at) {
   if (blob.size < 1500) return;                           // ほとんど無音
   const seq = ++meet.seq, kind = meet.kind;
@@ -1259,6 +1286,9 @@ function choreiStop() {
   clearInterval(meet.timer);
   clearInterval(meet.rotateTimer);
   if (meet.rec && meet.rec.state !== 'inactive') { meet.rec.onstop = null; meet.rec.stop(); }
+  if (meet.full && meet.full.rec.state !== 'inactive') meet.full.rec.stop();
+  meet.full = null;
+  meet.fullBlob = null;
   meet.streams.forEach(st => st.getTracks().forEach(t => t.stop()));
   if (meet.ctx) meet.ctx.close().catch(() => {});
   Object.assign(meet, { rec: null, streams: [], ctx: null, dest: null, recording: false, retry: false, items: [], pending: 0 });
@@ -1298,6 +1328,7 @@ $('choreiStart').addEventListener('click', async () => {
     setChoreiSink(true);   // ここからまとめを話し終わるまで、声は朝礼・会議のときの出し先（Meet）へ
     startSegment();
     meet.rotateTimer = setInterval(rotateSegment, SEGMENT_MS);
+    startFullRecording();
     // 「少しお待ちください」の声は先に作っておく（呼ばれたらすぐ言えるように）
     callServer(s.url, { action: 'tts', text: ACK_TEXT, voice: s.voice }).then(r => { meet.ack = r.audio; }).catch(() => {});
     tab.getAudioTracks()[0].addEventListener('ended', () => {
@@ -1336,6 +1367,7 @@ $('choreiReview').addEventListener('click', async () => {
     choreiState('最後の部分を文字にしています…', false);
     if (meet.rec && meet.rec.state !== 'inactive') meet.rec.stop();
     meet.rec = null;
+    await stopFullRecording();
     const until = Date.now() + 40000;
     await new Promise(ok => setTimeout(ok, 800));         // 止めた切れ端が送り始められるのを待つ
     while ((meet.pending > 0 || meet.answering) && Date.now() < until) await new Promise(ok => setTimeout(ok, 300));
@@ -1347,7 +1379,7 @@ $('choreiReview').addEventListener('click', async () => {
   let done = false;
   await setChoreiSink(true);
   const s = loadSettings();
-  choreiState(kind + 'をまとめています…（30秒ほど）', false);
+  choreiState(kind + 'をまとめています…（' + (kind === '朝礼' && meet.fullBlob ? '1分' : '30秒') + 'ほど）', false);
   busy = true; btnSend.disabled = true; btnMic.disabled = true;
   stage.startSearch();
   setStatus('thinking');
@@ -1357,7 +1389,14 @@ $('choreiReview').addEventListener('click', async () => {
   setCaption('hayato', '');
   addMsg('user', ask + '（' + Math.max(1, Math.round((Date.now() - meet.started) / 60000)) + '分）');
   try {
-    const res = await callServer(s.url, { action: 'meet_summary', kind, transcript, title: $('meetTitle').value.trim(), chat: $('meetChat').checked });
+    const payload = { action: 'meet_summary', kind, transcript, title: $('meetTitle').value.trim(), chat: $('meetChat').checked };
+    const full = meet.fullBlob;
+    if (kind === '朝礼' && full && full.size > 2000 && full.size < FULL_MAX_BYTES) {
+      payload.audio = await readBase64(full);
+      payload.mimeType = full.type;
+    }
+    const res = await callServer(s.url, payload);
+    meet.fullBlob = null;
     busy = false;
     done = true;
     meet.retry = false;
