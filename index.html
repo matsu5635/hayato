@@ -1403,7 +1403,10 @@ $('choreiReview').addEventListener('click', async () => {
     clearBackup();
     const total = res.まとめ.総評;
     const shown = total + '\n\n' + res.display;
-    addMsg('memo', '（' + kind + 'メモに ' + res.saved + '件を残しました' + (res.chat ? '・Chat に送りました' : '') + (res.timing ? '：' + res.timing.join('・') : '') + '）');
+    const src = res.from === '録音' ? '録音を丸ごと聞き取って作りました' : res.from === '書き起こし' ? '10秒ごとの書き起こしから作りました' : '';
+    addMsg('memo', '（' + kind + 'メモに ' + res.saved + '件を残しました' + (res.chat ? '・Chat に送りました' : '') + (src ? '・' + src : '') + (res.timing ? '：' + res.timing.join('・') : '') + '）');
+    // まとめの元になった書き起こし（おかしなメモが出たとき、聞き取りとまとめのどちらの問題か見分けるため）
+    if (res.transcript) addMsg('memo', '【聞き取った内容】\n' + (res.transcript.length > 4000 ? res.transcript.slice(0, 4000) + '…（続きは朝礼メモのシートの「書き起こし」）' : res.transcript));
     addMsg('hayato', shown);
     setCaption('hayato', shown);
     history.push({ role: 'user', content: ask }, { role: 'assistant', content: total });
