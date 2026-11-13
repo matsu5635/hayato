@@ -1209,11 +1209,13 @@ function rotateSegment() {
   if (old && old.state !== 'inactive') old.stop();
 }
 // 朝礼は、10秒の切れ端とは別に録音を丸ごと残し、まとめのときに送る（切れ端だけだと社内の言葉を聞き違えやすい）
-const FULL_MAX_BYTES = 14 * 1024 * 1024;     // これより大きければ送らず、書き起こしからまとめる
+const USE_FULL_RECORDING = false;
+const FULL_MAX_BYTES = 14 * 1024 * 1024;    // これより大きければ送らず、書き起こしからまとめる
 function startFullRecording() {
   meet.full = null;
   meet.fullBlob = null;
-  if (meet.kind !== '朝礼') return;
+  // 2026-11-13：丸ごとの録音を Gemini に聞かせると架空の朝礼を作ったのでやめた（10秒ごとの書き起こし＝Speech-to-Text からまとめる）
+  if (!USE_FULL_RECORDING || meet.kind !== '朝礼') return;
   try {
     const rec = new MediaRecorder(meet.dest.stream, { mimeType: meet.mime, audioBitsPerSecond: 24000 });
     const full = { rec, parts: [] };
