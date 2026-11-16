@@ -275,7 +275,7 @@
     <input type="text" id="meetTitle" placeholder="会議の名前（なくても可）" hidden>
   </div>
   <div class="chorei-note">「開始」を押したら、<b>Meet のタブ</b>を選び、<b>「タブの音声も共有する」</b>にチェックを入れてください。
-    10秒ごとに文字にして、下に出していきます。音声は文字にするのに使うだけで、残しません。<br>
+    朝礼は30秒ごと・会議は10秒ごとに文字にして、下に出していきます。音声は文字にするのに使うだけで、残しません。<br>
     ハヤトの声を Meet に届けるには、設定の「<b>朝礼・会議のときの声の出し先</b>」を CABLE にし、ハヤトの Meet のマイクを CABLE Output にします（画面共有は要りません）。</div>
   <label class="chorei-opt"><input type="checkbox" id="meetAnswer" checked> 「ハヤト、〇〇は？」と呼ばれたら、途中で答える
     <span>呼ばれたらすぐ「少しお待ちください」と言い、15〜30秒ほどで答えます</span></label>
@@ -1101,7 +1101,8 @@ async function askHayatoStream(s, text, turn, mine) {
 //   ・「総評お願い／まとめお願い」で、書き起こしから朝礼メモ・会議メモを作り、ハヤトが話す
 //   以前は録音を丸ごと最後に送っていたが、長いとサーバーのメモリを超えて止まった（2026-10-22）。小分けにして解決
 // ============================================================
-const SEGMENT_MS = 10000;                    // 10秒ごとに区切って文字にする
+const SEGMENT_MS = 10000;                    // 会議は10秒ごとに区切って文字にする（呼びかけにすぐ答えるため）
+const CHOREI_SEGMENT_MS = 30000;             // 朝礼は30秒ごと（2026-11-17：10秒だと文の途中で切れて聞き違いが多かった）
 const MEET_MAX_MIN = 180;                    // 3時間で自動でまとめる
 const MEET_BACKUP_KEY = 'hayato.meet.backup';
 const ACK_TEXT = 'はい、少しお待ちください。';
@@ -1251,7 +1252,7 @@ async function sendSegment(blob, at) {
     if (res.text) addTranscript({ seq, at, text: res.text });
     if (res.called && meet.recording) handleCall(res.question || res.text);
   } catch (err) {
-    addTranscript({ seq, at, text: '（' + hhmm(at) + ' ごろの10秒は文字にできませんでした）' });
+    addTranscript({ seq, at, text: '（' + hhmm(at) + ' ごろの音声は文字にできませんでした）' });
   } finally {
     meet.pending--;
   }
@@ -1329,7 +1330,7 @@ $('choreiStart').addEventListener('click', async () => {
     renderMeetLog();
     setChoreiSink(true);   // ここからまとめを話し終わるまで、声は朝礼・会議のときの出し先（Meet）へ
     startSegment();
-    meet.rotateTimer = setInterval(rotateSegment, SEGMENT_MS);
+    meet.rotateTimer = setInterval(rotateSegment, meet.kind === '朝礼' ? CHOREI_SEGMENT_MS : SEGMENT_MS);
     startFullRecording();
     // 「少しお待ちください」の声は先に作っておく（呼ばれたらすぐ言えるように）
     callServer(s.url, { action: 'tts', text: ACK_TEXT, voice: s.voice }).then(r => { meet.ack = r.audio; }).catch(() => {});
@@ -1405,7 +1406,7 @@ $('choreiReview').addEventListener('click', async () => {
     clearBackup();
     const total = res.まとめ.総評;
     const shown = total + '\n\n' + res.display;
-    const src = res.from === '録音' ? '録音を丸ごと聞き取って作りました' : res.from === '書き起こし' ? '10秒ごとの書き起こしから作りました' : '';
+    const src = res.from === '録音' ? '録音を丸ごと聞き取って作りました' : res.from === '書き起こし' ? '聞き取った書き起こしから作りました' : '';
     addMsg('memo', '（' + kind + 'メモに ' + res.saved + '件を残しました' + (res.chat ? '・Chat に送りました' : '') + (src ? '・' + src : '') + (res.timing ? '：' + res.timing.join('・') : '') + '）');
     // まとめの元になった書き起こし（おかしなメモが出たとき、聞き取りとまとめのどちらの問題か見分けるため）
     if (res.transcript) addMsg('memo', '【聞き取った内容】\n' + (res.transcript.length > 4000 ? res.transcript.slice(0, 4000) + '…（続きは朝礼メモのシートの「書き起こし」）' : res.transcript));
